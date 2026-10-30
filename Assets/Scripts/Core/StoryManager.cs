@@ -76,3 +76,4 @@ namespace AetherSerpent.Core
         public bool HasMilestone(string milestoneId) => unlockedMilestones.Contains(milestoneId);
     }
 }
+
