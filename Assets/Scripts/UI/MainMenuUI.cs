@@ -76,6 +76,16 @@ namespace AetherSerpent.UI
                 GameObject vUiObj = new GameObject("[FreeFireVoiceUI]");
                 vUiObj.AddComponent<FreeFireVoiceUI>();
             }
+            if (AetherSerpent.Social.NotificationManager.Instance == null)
+            {
+                GameObject nObj = new GameObject("[NotificationManager]");
+                nObj.AddComponent<AetherSerpent.Social.NotificationManager>();
+            }
+            if (FreeFireNotificationCenterUI.Instance == null)
+            {
+                GameObject nUiObj = new GameObject("[FreeFireNotificationCenterUI]");
+                nUiObj.AddComponent<FreeFireNotificationCenterUI>();
+            }
         }
 
         public void OnPlayClicked()
@@ -114,6 +124,16 @@ namespace AetherSerpent.UI
         {
             // Free Fire Style Profile & Identity Quick Pill in Top-Right
             var acc = AetherSerpent.Account.AccountManager.Instance;
+            int unread = AetherSerpent.Social.NotificationManager.Instance != null ?
+                AetherSerpent.Social.NotificationManager.Instance.UnreadCount : 0;
+
+            Rect notifPillRect = new Rect(Screen.width - 335, 15, 85, 48);
+            string notifIconLabel = unread > 0 ? $"🔔 <b>{unread}</b>\n<size=10>ALERTS</size>" : "🔔\n<size=10>ALERTS</size>";
+            if (GUI.Button(notifPillRect, notifIconLabel))
+            {
+                FreeFireNotificationCenterUI.Instance?.ToggleVisibility();
+            }
+
             if (acc != null && acc.Profile != null)
             {
                 Rect profilePillRect = new Rect(Screen.width - 240, 15, 225, 48);
@@ -138,7 +158,7 @@ namespace AetherSerpent.UI
             // Immediate GUI fallback for testing and easy navigation
             if (playButton == null)
             {
-                Rect menuRect = new Rect(Screen.width / 2f - 160, Screen.height / 2f - 170, 320, 340);
+                Rect menuRect = new Rect(Screen.width / 2f - 160, Screen.height / 2f - 200, 320, 400);
                 GUI.Box(menuRect, "<b>AETHERSERPENT // MAIN MENU</b>");
                 GUILayout.BeginArea(new Rect(menuRect.x + 20, menuRect.y + 35, menuRect.width - 40, menuRect.height - 45));
 
@@ -151,6 +171,12 @@ namespace AetherSerpent.UI
                 if (GUILayout.Button("PROFILE & IDENTITY [P]", GUILayout.Height(30)))
                 {
                     FreeFireProfileUI.Instance?.ToggleVisibility();
+                }
+
+                GUILayout.Space(6);
+                if (GUILayout.Button($"NOTIFICATIONS & ALERTS [N] {(unread > 0 ? $"({unread})" : "")}", GUILayout.Height(30)))
+                {
+                    FreeFireNotificationCenterUI.Instance?.ToggleVisibility();
                 }
 
                 GUILayout.Space(6);

@@ -117,6 +117,18 @@ namespace AetherSerpent.Core
                 vUiObj.AddComponent<AetherSerpent.UI.FreeFireVoiceUI>();
             }
 
+            if (AetherSerpent.Social.NotificationManager.Instance == null)
+            {
+                GameObject nObj = new GameObject("[NotificationManager]");
+                nObj.AddComponent<AetherSerpent.Social.NotificationManager>();
+            }
+
+            if (AetherSerpent.UI.FreeFireNotificationCenterUI.Instance == null)
+            {
+                GameObject nUiObj = new GameObject("[FreeFireNotificationCenterUI]");
+                nUiObj.AddComponent<AetherSerpent.UI.FreeFireNotificationCenterUI>();
+            }
+
             yield return new WaitForSeconds(0.3f);
             UpdateStatus("Validating Universal Render Pipeline & Shaders...", 0.45f);
 

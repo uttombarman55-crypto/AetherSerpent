@@ -26,7 +26,12 @@ import {
   VoiceChannel,
   VoiceUserState,
   VoiceSignalPayload,
-  VoiceAudioPacket
+  VoiceAudioPacket,
+  NotificationType,
+  AppNotification,
+  PresenceStatus,
+  LobbyReaction,
+  LobbyReactionPayload
 } from './types';
 
 interface Env {
@@ -405,6 +410,22 @@ export class SocialHubDO extends DurableObject {
       CREATE INDEX IF NOT EXISTS idx_chat_channel ON chat_messages(channel, timestamp DESC);
       CREATE INDEX IF NOT EXISTS idx_chat_target ON chat_messages(target_group_id, timestamp DESC);
       CREATE INDEX IF NOT EXISTS idx_chat_whisper ON chat_messages(sender_id, recipient_id, timestamp DESC);
+
+      CREATE TABLE IF NOT EXISTS notifications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        player_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        title TEXT NOT NULL,
+        message TEXT NOT NULL,
+        sender_id TEXT,
+        sender_name TEXT,
+        sender_numeric_id INTEGER,
+        data_json TEXT,
+        is_read INTEGER DEFAULT 0,
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_notifications_player ON notifications(player_id, is_read, created_at DESC);
     `);
   }
 
@@ -442,6 +463,55 @@ export class SocialHubDO extends DurableObject {
     for (const r of profCursor) { prof = r; break; }
 
     return this.buildProfileObject(acc, prof);
+  }
+
+  public createNotification(
+    playerId: string,
+    type: NotificationType,
+    title: string,
+    message: string,
+    sender?: { id: string; name: string; numericId: number },
+    dataJson?: string
+  ): AppNotification {
+    const now = Date.now();
+    this.ctx.storage.sql.exec(
+      `INSERT INTO notifications (player_id, type, title, message, sender_id, sender_name, sender_numeric_id, data_json, is_read, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+      playerId, type, title, message, sender?.id || null, sender?.name || null, sender?.numericId || null, dataJson || null, now
+    );
+
+    let id = 1;
+    const lastId = this.ctx.storage.sql.exec(`SELECT last_insert_rowid() AS id`);
+    for (const r of lastId) { id = r.id as number; break; }
+
+    const notif: AppNotification = {
+      id,
+      playerId,
+      type,
+      title,
+      message,
+      senderId: sender?.id,
+      senderName: sender?.name,
+      senderNumericId: sender?.numericId,
+      dataJson,
+      isRead: false,
+      createdAt: now
+    };
+
+    // Push real-time event to active WebSocket client if connected
+    const pushPayload = JSON.stringify({
+      type: 'NOTIFICATION_RECEIVED',
+      notification: notif,
+      timestamp: now
+    });
+
+    for (const [ws, info] of this.chatSockets.entries()) {
+      if (info.playerId === playerId) {
+        try { ws.send(pushPayload); } catch { this.chatSockets.delete(ws); }
+      }
+    }
+
+    return notif;
   }
 
   private async processChatMessage(
@@ -594,6 +664,17 @@ export class SocialHubDO extends DurableObject {
     const lastIdCursor = this.ctx.storage.sql.exec(`SELECT last_insert_rowid() AS id`);
     let msgId = now;
     for (const r of lastIdCursor) { msgId = (r.id as number) || now; break; }
+
+    // Dispatch notification if private whisper
+    if (channel === 'whisper' && recipientId) {
+      this.createNotification(
+        recipientId,
+        'whisper',
+        `Whisper from ${sender.username}`,
+        cleanMsg.substring(0, 100),
+        { id: sender.playerId, name: sender.username, numericId: sender.numericId }
+      );
+    }
 
     const chatMessage: ChatMessage = {
       id: msgId,
@@ -1125,6 +1206,196 @@ export class SocialHubDO extends DurableObject {
         messages.reverse();
         return Response.json({ success: true, channel, count: messages.length, messages });
       }
+
+      // ---------------------------------------------------------
+      // NOTIFICATION SYSTEM & LOBBY QUALITY ENDPOINTS
+      // ---------------------------------------------------------
+
+      // Get Player Notifications
+      if (path === '/notifications/list' && request.method === 'GET') {
+        const playerId = url.searchParams.get('playerId') || '';
+        if (!playerId) return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+
+        const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '30', 10), 1), 100);
+        const unreadOnly = url.searchParams.get('unreadOnly') === 'true';
+
+        let cursor;
+        if (unreadOnly) {
+          cursor = this.ctx.storage.sql.exec(
+            `SELECT * FROM notifications WHERE player_id = ? AND is_read = 0 ORDER BY created_at DESC LIMIT ?`,
+            playerId, limit
+          );
+        } else {
+          cursor = this.ctx.storage.sql.exec(
+            `SELECT * FROM notifications WHERE player_id = ? ORDER BY created_at DESC LIMIT ?`,
+            playerId, limit
+          );
+        }
+
+        const notifications: AppNotification[] = [];
+        for (const r of cursor) {
+          notifications.push({
+            id: r.id as number,
+            playerId: r.player_id as string,
+            type: r.type as NotificationType,
+            title: r.title as string,
+            message: r.message as string,
+            senderId: (r.sender_id as string) || undefined,
+            senderName: (r.sender_name as string) || undefined,
+            senderNumericId: (r.sender_numeric_id as number) || undefined,
+            dataJson: (r.data_json as string) || undefined,
+            isRead: (r.is_read as number) === 1,
+            createdAt: r.created_at as number,
+          });
+        }
+
+        const countCursor = this.ctx.storage.sql.exec(
+          `SELECT COUNT(*) AS unread FROM notifications WHERE player_id = ? AND is_read = 0`,
+          playerId
+        );
+        let unreadCount = 0;
+        for (const c of countCursor) { unreadCount = c.unread as number; break; }
+
+        return Response.json({ success: true, unreadCount, count: notifications.length, notifications });
+      }
+
+      // Mark Notification(s) as Read
+      if (path === '/notifications/read' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as {
+          playerId?: string;
+          notificationId?: number;
+          all?: boolean;
+        };
+        const playerId = body.playerId || url.searchParams.get('playerId') || '';
+        if (!playerId) return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+
+        if (body.all || (body as any).markAll) {
+          this.ctx.storage.sql.exec(`UPDATE notifications SET is_read = 1 WHERE player_id = ?`, playerId);
+        } else if (body.notificationId) {
+          this.ctx.storage.sql.exec(`UPDATE notifications SET is_read = 1 WHERE player_id = ? AND id = ?`, playerId, body.notificationId);
+        }
+
+        return Response.json({ success: true, message: 'Notification(s) updated.' });
+      }
+
+      // Broadcast System Announcement
+      if (path === '/notifications/system' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as {
+          title?: string;
+          message?: string;
+          targetPlayerId?: string;
+        };
+        const title = body.title || 'System Announcement';
+        const message = body.message || '';
+        if (!message) return Response.json({ success: false, error: 'Message cannot be empty' }, { status: 400 });
+
+        const now = Date.now();
+        const payloadStr = JSON.stringify({
+          type: 'SYSTEM_ANNOUNCEMENT',
+          title,
+          message,
+          timestamp: now
+        });
+
+        if (body.targetPlayerId) {
+          this.createNotification(body.targetPlayerId, 'system', title, message);
+        }
+
+        // Broadcast to all active chat sockets
+        for (const [ws, info] of this.chatSockets.entries()) {
+          try {
+            ws.send(payloadStr);
+            if (!body.targetPlayerId || info.playerId !== body.targetPlayerId) {
+              this.createNotification(info.playerId, 'system', title, message);
+            }
+          } catch {
+            this.chatSockets.delete(ws);
+          }
+        }
+
+        return Response.json({ success: true, message: 'System announcement broadcasted.' });
+      }
+
+      // Lobby Quick Reactions / Emotes
+      if ((path === '/reaction' || path === '/social/reaction') && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as {
+          playerId?: string;
+          reaction?: LobbyReaction;
+          reactionType?: LobbyReaction;
+          squadId?: string;
+        };
+        const playerId = body.playerId || url.searchParams.get('playerId') || '';
+        if (!playerId) return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+
+        const reaction = (body.reaction || body.reactionType || 'fire') as LobbyReaction;
+        const accCursor = this.ctx.storage.sql.exec(`SELECT username, numeric_id FROM accounts WHERE id = ?`, playerId);
+        let uName = 'Drifter';
+        let numId = 0;
+        for (const a of accCursor) { uName = a.username as string; numId = a.numeric_id as number; break; }
+
+        let squadId = body.squadId;
+        if (!squadId) {
+          const sqCursor = this.ctx.storage.sql.exec(`SELECT squad_id FROM squad_members WHERE player_id = ?`, playerId);
+          for (const s of sqCursor) { squadId = s.squad_id as string; break; }
+        }
+
+        const reactionPayload: LobbyReactionPayload = {
+          senderId: playerId,
+          senderName: uName,
+          senderNumericId: numId,
+          reaction,
+          squadId,
+          timestamp: Date.now()
+        };
+
+        const pushStr = JSON.stringify({
+          type: 'LOBBY_REACTION',
+          payload: reactionPayload,
+          timestamp: Date.now()
+        });
+
+        // Broadcast to chat sockets in the squad or lobby
+        for (const [ws, info] of this.chatSockets.entries()) {
+          if (!squadId || info.squadId === squadId) {
+            try { ws.send(pushStr); } catch { this.chatSockets.delete(ws); }
+          }
+        }
+
+        return Response.json({ success: true, reaction: reactionPayload });
+      }
+
+      // Player Presence & Do Not Disturb Update
+      if (path === '/presence/update' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as {
+          playerId?: string;
+          status?: PresenceStatus;
+          showOnlineStatus?: boolean;
+          matchRoomId?: string;
+        };
+        const playerId = body.playerId || url.searchParams.get('playerId') || '';
+        if (!playerId) return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+
+        const status = body.status || 'online';
+        const matchRoomId = body.matchRoomId || null;
+        const now = Date.now();
+
+        this.ctx.storage.sql.exec(
+          `INSERT INTO player_presence (player_id, status, in_match_room, last_seen_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(player_id) DO UPDATE SET status = ?, in_match_room = coalesce(?, in_match_room), last_seen_at = ?`,
+          playerId, status, matchRoomId, now, status, matchRoomId, now
+        );
+
+        if (typeof body.showOnlineStatus === 'boolean') {
+          this.ctx.storage.sql.exec(
+            `UPDATE privacy_settings SET show_online_status = ? WHERE player_id = ?`,
+            body.showOnlineStatus ? 1 : 0, playerId
+          );
+        }
+
+        return Response.json({ success: true, status, showOnlineStatus: body.showOnlineStatus });
+      }
+
       // ---------------------------------------------------------
       // 1. ACCOUNT SYSTEM ENDPOINTS
       // ---------------------------------------------------------
@@ -1853,26 +2124,6 @@ export class SocialHubDO extends DurableObject {
       // 4. FRIENDS SYSTEM (REQUESTS, PRESENCE & LAST LOGIN)
       // ---------------------------------------------------------
 
-      // Presence Update
-      if (path === '/presence/update' && request.method === 'POST') {
-        const body = (await request.json().catch(() => ({}))) as { status?: string; matchRoomId?: string };
-        const playerId = (body as any).playerId || url.searchParams.get('playerId') || '';
-        const status = body.status || 'online';
-        const matchRoomId = body.matchRoomId || null;
-        if (!playerId) return Response.json({ success: false, error: 'Missing playerId' }, { status: 400 });
-
-        this.ctx.storage.sql.exec(
-          `INSERT OR REPLACE INTO player_presence (player_id, status, in_match_room, last_seen_at)
-           VALUES (?, ?, ?, ?)`,
-          playerId,
-          status,
-          matchRoomId,
-          Date.now()
-        );
-
-        return Response.json({ success: true, status });
-      }
-
       // Friends List with Online / In-Match / Offline & Last Login
       if (path === '/friends/list' && request.method === 'GET') {
         const playerId = url.searchParams.get('playerId');
@@ -1993,6 +2244,14 @@ export class SocialHubDO extends DurableObject {
           receiver.id as string,
           receiver.username as string,
           Date.now()
+        );
+
+        this.createNotification(
+          receiver.id as string,
+          'friend_request',
+          'New Friend Request',
+          `${senderName} sent you a friend request.`,
+          { id: senderId, name: senderName, numericId: senderNumericId }
         );
 
         return Response.json({ success: true, message: `Friend request sent to ${receiver.username}.` });
@@ -2255,6 +2514,19 @@ export class SocialHubDO extends DurableObject {
           senderName,
           targetId,
           Date.now()
+        );
+
+        let inviteId = Date.now();
+        const lastInv = this.ctx.storage.sql.exec(`SELECT last_insert_rowid() AS id`);
+        for (const r of lastInv) { inviteId = r.id as number; break; }
+
+        this.createNotification(
+          targetId,
+          'squad_invite',
+          'Squad Invitation',
+          `${senderName} invited you to join [${(sRow?.tag as string) || 'AES'}] ${(sRow?.name as string) || 'Squad'}.`,
+          { id: playerId, name: senderName, numericId: 0 },
+          JSON.stringify({ squadId, squadName: sRow?.name, squadTag: sRow?.tag, inviteId })
         );
 
         return Response.json({ success: true, message: 'Squad invite delivered!' });

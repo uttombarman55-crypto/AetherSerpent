@@ -120,6 +120,16 @@ namespace AetherSerpent.UI
                 GameObject vUiObj = new GameObject("[FreeFireVoiceUI]");
                 vUiObj.AddComponent<FreeFireVoiceUI>();
             }
+            if (AetherSerpent.Social.NotificationManager.Instance == null)
+            {
+                GameObject nObj = new GameObject("[NotificationManager]");
+                nObj.AddComponent<AetherSerpent.Social.NotificationManager>();
+            }
+            if (FreeFireNotificationCenterUI.Instance == null)
+            {
+                GameObject nUiObj = new GameObject("[FreeFireNotificationCenterUI]");
+                nUiObj.AddComponent<FreeFireNotificationCenterUI>();
+            }
         }
 
         private void OnDestroy()
@@ -335,6 +345,16 @@ namespace AetherSerpent.UI
                 GameObject vUiObj = new GameObject("[FreeFireVoiceUI]");
                 vUiObj.AddComponent<FreeFireVoiceUI>();
             }
+            if (AetherSerpent.Social.NotificationManager.Instance == null)
+            {
+                GameObject nObj = new GameObject("[NotificationManager]");
+                nObj.AddComponent<AetherSerpent.Social.NotificationManager>();
+            }
+            if (FreeFireNotificationCenterUI.Instance == null)
+            {
+                GameObject nUiObj = new GameObject("[FreeFireNotificationCenterUI]");
+                nUiObj.AddComponent<FreeFireNotificationCenterUI>();
+            }
         }
 
         public void RestartGame()
@@ -374,8 +394,19 @@ namespace AetherSerpent.UI
             if ((FreeFireProfileUI.Instance == null || !FreeFireProfileUI.Instance.IsVisible) &&
                 (FreeFireSocialUI.Instance == null || !FreeFireSocialUI.Instance.IsVisible) &&
                 (FreeFireChatUI.Instance == null || !FreeFireChatUI.Instance.IsVisible) &&
-                (FreeFireVoiceUI.Instance == null || !FreeFireVoiceUI.Instance.IsVisible))
+                (FreeFireVoiceUI.Instance == null || !FreeFireVoiceUI.Instance.IsVisible) &&
+                (FreeFireNotificationCenterUI.Instance == null || !FreeFireNotificationCenterUI.Instance.IsVisible))
             {
+                int unread = AetherSerpent.Social.NotificationManager.Instance != null ?
+                    AetherSerpent.Social.NotificationManager.Instance.UnreadCount : 0;
+                string notifLabel = unread > 0 ? $"<b>🔔 ({unread}) [N]</b>" : "<b>🔔 [N]</b>";
+
+                Rect notifRect = new Rect(Screen.width - 610, 10, 115, 28);
+                if (GUI.Button(notifRect, notifLabel))
+                {
+                    FreeFireNotificationCenterUI.Instance?.ToggleVisibility();
+                }
+
                 var acc = AetherSerpent.Account.AccountManager.Instance;
                 string uidStr = acc != null && acc.NumericId > 0 ? $"UID: {acc.NumericId}" : "PROFILE";
                 Rect profileRect = new Rect(Screen.width - 490, 10, 115, 28);

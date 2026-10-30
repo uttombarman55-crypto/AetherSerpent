@@ -430,4 +430,35 @@ export interface VoiceAudioPacket {
   position?: Vector3Data; // 3D spatial position for proximity rolloff
 }
 
+// ==========================================
+// NOTIFICATION & LOBBY QUALITY SYSTEM
+// ==========================================
+export type NotificationType = 'friend_request' | 'squad_invite' | 'clan_invite' | 'whisper' | 'system';
+export type PresenceStatus = 'online' | 'away' | 'in_match' | 'dnd' | 'invisible' | 'offline';
+export type LobbyReaction = 'fire' | 'serpent' | 'crown' | 'gg' | 'heart' | 'lightning' | 'rip' | 'shield';
+
+export interface AppNotification {
+  id: number;
+  playerId: string;
+  type: NotificationType;
+  title: string;
+  message: string;
+  senderId?: string;
+  senderName?: string;
+  senderNumericId?: number;
+  dataJson?: string;
+  isRead: boolean;
+  createdAt: number;
+}
+
+export interface LobbyReactionPayload {
+  senderId: string;
+  senderName: string;
+  senderNumericId: number;
+  reaction: LobbyReaction;
+  squadId?: string;
+  timestamp: number;
+}
+
+
 

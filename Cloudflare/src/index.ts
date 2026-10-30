@@ -507,12 +507,14 @@ export default {
         return socialStub.fetch(reqProxy);
       }
 
-      // 9. Social Hub (Leaderboards, Friends, Parties, Chat, Voice, Cloud Saves)
+      // 9. Social Hub (Leaderboards, Friends, Parties, Chat, Voice, Notifications, Cloud Saves)
       if (
         url.pathname.startsWith('/api/leaderboard/') ||
         url.pathname.startsWith('/api/social/') ||
         url.pathname.startsWith('/api/chat/') ||
         url.pathname.startsWith('/api/voice/') ||
+        url.pathname.startsWith('/api/notifications/') ||
+        url.pathname.startsWith('/api/presence/') ||
         url.pathname.startsWith('/api/save/')
       ) {
         const authHeader = request.headers.get('Authorization');
@@ -540,6 +542,8 @@ export default {
                                        .replace('/api/social', '')
                                        .replace('/api/chat', '/chat')
                                        .replace('/api/voice', '/voice')
+                                       .replace('/api/notifications', '/notifications')
+                                       .replace('/api/presence', '/presence')
                                        .replace('/api/save', '/save');
         if (url.pathname === '/api/leaderboard/submit') {
           internalPath = '/submit-score';
