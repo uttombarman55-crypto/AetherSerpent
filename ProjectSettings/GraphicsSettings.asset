@@ -1,0 +1,17 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!30 &1
+GraphicsSettings:
+  m_ObjectHideFlags: 0
+  serializedVersion: 17
+  m_Deferred:
+    m_Mode: 1
+    m_Shader: {fileID: 0}
+  m_TierSettings: []
+  m_CustomRenderPipeline: {fileID: 11400000, guid: f1000000000000000000000000000010, type: 2}
+  m_TransparencySortMode: 0
+  m_TransparencySortAxis: {x: 0, y: 0, z: 1}
+  m_ShaderDefines: []
+  m_LightmapStripping: 0
+  m_InstancingStripping: 0
+  m_LightProbeStripping: 0

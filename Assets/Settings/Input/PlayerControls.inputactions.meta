@@ -1,0 +1,11 @@
+fileFormatVersion: 2
+guid: f4000000000000000000000000000040
+InputActionImporter:
+  externalObjects: {}
+  GenerateWrapperCode: 1
+  WrapperCodePath: Assets/Scripts/Input/PlayerControlsWrapper.cs
+  WrapperClassName: PlayerControlsWrapper
+  WrapperCodeNamespace: AetherSerpent.Input
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
