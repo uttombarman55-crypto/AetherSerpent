@@ -3,7 +3,13 @@ import { WorldZoneDO } from './WorldZoneDO';
 import { SocialHubDO } from './SocialHubDO';
 import { AuthService } from './auth';
 import { getDashboardHtml } from './dashboard';
-import { AuthResponse, MatchmakingResponse, CoopRole, VersionCheckResponse } from './types';
+import {
+  AuthResponse,
+  MatchmakingResponse,
+  CoopRole,
+  VersionCheckResponse,
+  AccountAuthResponse
+} from './types';
 
 export { GameRoomDO, WorldZoneDO, SocialHubDO };
 
@@ -21,7 +27,7 @@ interface Env {
 // In-Memory IP Rate Limiter for Worker edge instances
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
 
-function checkRateLimit(ip: string, maxRequests: number = 60, windowMs: number = 60000): boolean {
+function checkRateLimit(ip: string, maxRequests: number = 120, windowMs: number = 60000): boolean {
   const now = Date.now();
   const entry = rateLimitMap.get(ip);
 
@@ -55,8 +61,8 @@ export default {
     }
 
     // 2. Global Rate Limiter Check
-    if (!checkRateLimit(clientIp, 120, 60000)) {
-      return new Response(JSON.stringify({ error: 'Rate limit exceeded. Please wait.' }), {
+    if (!checkRateLimit(clientIp, 180, 60000)) {
+      return new Response(JSON.stringify({ error: 'Rate limit exceeded. Please wait a moment.' }), {
         status: 429,
         headers: {
           'Access-Control-Allow-Origin': '*',
@@ -118,17 +124,128 @@ export default {
       if (url.pathname === '/api/system/maintenance') {
         return Response.json({
           maintenance: false,
-          message: 'All servers nominal. Co-op and Leaderboards active.'
+          message: 'All servers nominal. Co-op, Account and Leaderboards active.'
         }, { headers: { 'Access-Control-Allow-Origin': '*' } });
       }
 
-      // 5. Player Authentication with Turnstile & JWT
+      // ---------------------------------------------------------
+      // 5. FREE FIRE STYLE ACCOUNT & IDENTITY SYSTEM
+      // ---------------------------------------------------------
+      const socialId = env.SOCIAL_HUB.idFromName('GLOBAL_SOCIAL_HUB');
+      const socialStub = env.SOCIAL_HUB.get(socialId);
+
+      // Register / Login / Guest-Login / Upgrade-Guest
+      if (
+        (url.pathname === '/api/account/register' ||
+         url.pathname === '/api/account/login' ||
+         url.pathname === '/api/account/guest-login' ||
+         url.pathname === '/api/account/upgrade-guest') &&
+        request.method === 'POST'
+      ) {
+        const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+        const turnstileToken = (body.turnstileToken as string) || request.headers.get('X-Turnstile-Token') || 'test-token';
+
+        // Optional Turnstile Bot check on registration and guest account creation
+        if (url.pathname === '/api/account/register' || url.pathname === '/api/account/guest-login') {
+          const isTurnstileValid = await AuthService.verifyTurnstile(
+            turnstileToken,
+            env.TURNSTILE_SECRET_KEY,
+            clientIp
+          );
+          if (!isTurnstileValid) {
+            return Response.json({ success: false, error: 'Security verification failed.' }, {
+              status: 403,
+              headers: { 'Access-Control-Allow-Origin': '*' }
+            });
+          }
+        }
+
+        // Forward to SocialHubDO SQLite table
+        const internalPath = url.pathname.replace('/api', '');
+        const internalUrl = new URL(request.url);
+        internalUrl.pathname = internalPath;
+
+        // If upgrade-guest, verify existing JWT token first
+        if (url.pathname === '/api/account/upgrade-guest') {
+          const authHeader = request.headers.get('Authorization');
+          const token = authHeader?.replace('Bearer ', '') || url.searchParams.get('token');
+          if (!token) return Response.json({ success: false, error: 'Authorization required to upgrade.' }, { status: 401 });
+          const payload = await AuthService.verifyJWT(token, env.JWT_SECRET);
+          if (!payload) return Response.json({ success: false, error: 'Invalid session token.' }, { status: 401 });
+          internalUrl.searchParams.set('playerId', payload.sub);
+          body.playerId = payload.sub;
+        }
+
+        const subReq = new Request(internalUrl.toString(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+
+        const doRes = await socialStub.fetch(subReq);
+        const resData = (await doRes.json()) as Record<string, unknown>;
+
+        if (!resData.success) {
+          return Response.json(resData, {
+            status: doRes.status,
+            headers: { 'Access-Control-Allow-Origin': '*' }
+          });
+        }
+
+        const account = resData.account as { playerId: string; username: string; numericId: number; isGuest: boolean };
+        const nowInSeconds = Math.floor(Date.now() / 1000);
+
+        // Sign Access Token (15 minutes)
+        const accessToken = await AuthService.signJWT(
+          {
+            sub: account.playerId,
+            username: account.username,
+            role: 'player',
+            iat: nowInSeconds,
+            exp: nowInSeconds + (15 * 60),
+          },
+          env.JWT_SECRET
+        );
+
+        // Sign Refresh Token (7 days)
+        const refreshToken = await AuthService.signJWT(
+          {
+            sub: account.playerId,
+            username: account.username,
+            role: 'player',
+            iat: nowInSeconds,
+            exp: nowInSeconds + (7 * 24 * 60 * 60),
+          },
+          env.JWT_REFRESH_SECRET
+        );
+
+        const fullResponse: AccountAuthResponse = {
+          success: true,
+          accessToken,
+          refreshToken,
+          playerId: account.playerId,
+          username: account.username,
+          numericId: account.numericId,
+          isGuest: account.isGuest,
+          recoveryCode: resData.recoveryCode as string | undefined,
+          expiresIn: 900,
+          profile: resData.profile as any,
+        };
+
+        return Response.json(fullResponse, {
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Content-Type': 'application/json',
+          },
+        });
+      }
+
+      // Legacy simple login for backward compatibility
       if (url.pathname === '/api/auth/login' && request.method === 'POST') {
         const body = (await request.json().catch(() => ({}))) as { username?: string; turnstileToken?: string };
         const username = body.username?.trim() || `Serpent_${Math.floor(Math.random() * 9000 + 1000)}`;
         const turnstileToken = body.turnstileToken || request.headers.get('X-Turnstile-Token') || 'test-token';
 
-        // Cloudflare Turnstile Verification
         const isTurnstileValid = await AuthService.verifyTurnstile(
           turnstileToken,
           env.TURNSTILE_SECRET_KEY,
@@ -145,48 +262,27 @@ export default {
         const playerId = `usr_${crypto.randomUUID().substring(0, 8)}`;
         const nowInSeconds = Math.floor(Date.now() / 1000);
 
-        // Sign Access Token (15 minutes)
         const accessToken = await AuthService.signJWT(
-          {
-            sub: playerId,
-            username,
-            role: 'player',
-            iat: nowInSeconds,
-            exp: nowInSeconds + (15 * 60),
-          },
+          { sub: playerId, username, role: 'player', iat: nowInSeconds, exp: nowInSeconds + (15 * 60) },
           env.JWT_SECRET
         );
 
-        // Sign Refresh Token (7 days)
         const refreshToken = await AuthService.signJWT(
-          {
-            sub: playerId,
-            username,
-            role: 'player',
-            iat: nowInSeconds,
-            exp: nowInSeconds + (7 * 24 * 60 * 60),
-          },
+          { sub: playerId, username, role: 'player', iat: nowInSeconds, exp: nowInSeconds + (7 * 24 * 60 * 60) },
           env.JWT_REFRESH_SECRET
         );
 
-        const response: AuthResponse = {
+        return Response.json({
           success: true,
           accessToken,
           refreshToken,
           playerId,
           username,
           expiresIn: 900,
-        };
-
-        return Response.json(response, {
-          headers: {
-            'Access-Control-Allow-Origin': '*',
-            'Content-Type': 'application/json',
-          },
-        });
+        }, { headers: { 'Access-Control-Allow-Origin': '*' } });
       }
 
-      // 6. Refresh Token Rotation
+      // Refresh Token Rotation
       if (url.pathname === '/api/auth/refresh' && request.method === 'POST') {
         const body = (await request.json().catch(() => ({}))) as { refreshToken?: string };
         const oldRefresh = body.refreshToken;
@@ -207,24 +303,12 @@ export default {
 
         const nowInSeconds = Math.floor(Date.now() / 1000);
         const newAccessToken = await AuthService.signJWT(
-          {
-            sub: payload.sub,
-            username: payload.username,
-            role: 'player',
-            iat: nowInSeconds,
-            exp: nowInSeconds + (15 * 60),
-          },
+          { sub: payload.sub, username: payload.username, role: 'player', iat: nowInSeconds, exp: nowInSeconds + (15 * 60) },
           env.JWT_SECRET
         );
 
         const newRefreshToken = await AuthService.signJWT(
-          {
-            sub: payload.sub,
-            username: payload.username,
-            role: 'player',
-            iat: nowInSeconds,
-            exp: nowInSeconds + (7 * 24 * 60 * 60),
-          },
+          { sub: payload.sub, username: payload.username, role: 'player', iat: nowInSeconds, exp: nowInSeconds + (7 * 24 * 60 * 60) },
           env.JWT_REFRESH_SECRET
         );
 
@@ -238,14 +322,97 @@ export default {
         }, { headers: { 'Access-Control-Allow-Origin': '*' } });
       }
 
-      // 7. Logout Endpoint
+      // Account Recovery (No token required)
+      if (url.pathname === '/api/account/recover' && request.method === 'POST') {
+        const internalUrl = new URL(request.url);
+        internalUrl.pathname = '/account/recover';
+        const proxyReq = new Request(internalUrl.toString(), request);
+        const res = await socialStub.fetch(proxyReq);
+        const headers = new Headers(res.headers);
+        headers.set('Access-Control-Allow-Origin', '*');
+        return new Response(res.body, { status: res.status, headers });
+      }
+
+      // Change Username (Requires Token)
+      if (url.pathname === '/api/account/change-username' && request.method === 'POST') {
+        const authHeader = request.headers.get('Authorization');
+        const token = authHeader?.replace('Bearer ', '') || url.searchParams.get('token');
+        if (!token) return Response.json({ success: false, error: 'Authorization required' }, { status: 401 });
+
+        const payload = await AuthService.verifyJWT(token, env.JWT_SECRET);
+        if (!payload) return Response.json({ success: false, error: 'Invalid or expired token' }, { status: 401 });
+
+        const internalUrl = new URL(request.url);
+        internalUrl.pathname = '/account/change-username';
+        internalUrl.searchParams.set('playerId', payload.sub);
+
+        const proxyReq = new Request(internalUrl.toString(), request);
+        const res = await socialStub.fetch(proxyReq);
+        const resData = (await res.json()) as Record<string, unknown>;
+
+        if (!resData.success) {
+          return Response.json(resData, { status: res.status, headers: { 'Access-Control-Allow-Origin': '*' } });
+        }
+
+        const newUsername = resData.username as string;
+        const nowInSeconds = Math.floor(Date.now() / 1000);
+
+        // Sign updated tokens with the new username
+        const newAccessToken = await AuthService.signJWT(
+          { sub: payload.sub, username: newUsername, role: 'player', iat: nowInSeconds, exp: nowInSeconds + (15 * 60) },
+          env.JWT_SECRET
+        );
+        const newRefreshToken = await AuthService.signJWT(
+          { sub: payload.sub, username: newUsername, role: 'player', iat: nowInSeconds, exp: nowInSeconds + (7 * 24 * 60 * 60) },
+          env.JWT_REFRESH_SECRET
+        );
+
+        resData.accessToken = newAccessToken;
+        resData.refreshToken = newRefreshToken;
+
+        return Response.json(resData, { headers: { 'Access-Control-Allow-Origin': '*' } });
+      }
+
+      // Profile Endpoints
+      if (url.pathname.startsWith('/api/profile/')) {
+        const authHeader = request.headers.get('Authorization');
+        const token = authHeader?.replace('Bearer ', '') || url.searchParams.get('token');
+        let playerPayload: { sub: string; username: string } | null = null;
+        if (token) {
+          playerPayload = await AuthService.verifyJWT(token, env.JWT_SECRET);
+        }
+
+        // Public read endpoints: /get, /search
+        const isPublic = url.pathname === '/api/profile/get' || url.pathname === '/api/profile/search';
+        if (!isPublic && !playerPayload) {
+          return Response.json({ success: false, error: 'Authorization required for this profile action.' }, {
+            status: 401,
+            headers: { 'Access-Control-Allow-Origin': '*' }
+          });
+        }
+
+        const internalUrl = new URL(request.url);
+        internalUrl.pathname = url.pathname.replace('/api', '');
+        if (playerPayload) {
+          internalUrl.searchParams.set('playerId', playerPayload.sub);
+          internalUrl.searchParams.set('username', playerPayload.username);
+        }
+
+        const proxyReq = new Request(internalUrl.toString(), request);
+        const res = await socialStub.fetch(proxyReq);
+        const headers = new Headers(res.headers);
+        headers.set('Access-Control-Allow-Origin', '*');
+        return new Response(res.body, { status: res.status, headers });
+      }
+
+      // Logout Endpoint
       if (url.pathname === '/api/auth/logout' && request.method === 'POST') {
         return Response.json({ success: true, message: 'Session terminated' }, {
           headers: { 'Access-Control-Allow-Origin': '*' }
         });
       }
 
-      // 8. Matchmaking / Room Allocation
+      // 6. Matchmaking / Room Allocation
       if (url.pathname === '/api/matchmaking/find-or-create' && request.method === 'POST') {
         const authHeader = request.headers.get('Authorization');
         const token = authHeader?.replace('Bearer ', '') || url.searchParams.get('token');
@@ -284,7 +451,7 @@ export default {
         });
       }
 
-      // 9. GameRoom WebSocket Upgrades
+      // 7. GameRoom WebSocket Upgrades
       const roomMatch = url.pathname.match(/^\/api\/room\/([^/]+)\/ws$/);
       if (roomMatch) {
         const roomId = roomMatch[1];
@@ -293,7 +460,7 @@ export default {
         return stub.fetch(request);
       }
 
-      // 10. World Zone Shards
+      // 8. World Zone Shards
       const zoneMatch = url.pathname.match(/^\/api\/zone\/([^/]+)\/ws$/);
       if (zoneMatch) {
         const zoneId = zoneMatch[1];
@@ -302,13 +469,12 @@ export default {
         return stub.fetch(request);
       }
 
-      // 11. Social Hub (Leaderboards, Friends, Parties, Cloud Saves)
+      // 9. Social Hub (Leaderboards, Friends, Parties, Cloud Saves)
       if (
         url.pathname.startsWith('/api/leaderboard/') ||
         url.pathname.startsWith('/api/social/') ||
         url.pathname.startsWith('/api/save/')
       ) {
-        // Authenticate request token for score submission, friends, party, saves
         const authHeader = request.headers.get('Authorization');
         const token = authHeader?.replace('Bearer ', '') || url.searchParams.get('token');
         let playerPayload: { sub: string; username: string } | null = null;
@@ -317,7 +483,6 @@ export default {
           playerPayload = await AuthService.verifyJWT(token, env.JWT_SECRET);
         }
 
-        // Leaderboard reads are public; mutations require auth
         const isPublicRead = request.method === 'GET' && url.pathname.startsWith('/api/leaderboard/');
         if (!isPublicRead && !playerPayload) {
           return Response.json({ error: 'Authorization required for this endpoint.' }, {
@@ -326,11 +491,6 @@ export default {
           });
         }
 
-        // Forward to the singleton SocialHubDO
-        const socialId = env.SOCIAL_HUB.idFromName('GLOBAL_SOCIAL_HUB');
-        const stub = env.SOCIAL_HUB.get(socialId);
-
-        // Normalize internal path
         let internalPath = url.pathname.replace('/api/leaderboard', '/leaderboard')
                                        .replace('/api/social', '')
                                        .replace('/api/save', '/save');
@@ -346,9 +506,8 @@ export default {
         }
 
         const proxyReq = new Request(internalUrl.toString(), request);
-        const res = await stub.fetch(proxyReq);
+        const res = await socialStub.fetch(proxyReq);
 
-        // Return with CORS headers
         const newHeaders = new Headers(res.headers);
         newHeaders.set('Access-Control-Allow-Origin', '*');
         return new Response(res.body, {

@@ -69,6 +69,18 @@ namespace AetherSerpent.Core
                 verObj.AddComponent<AetherSerpent.Core.VersionCheckManager>();
             }
 
+            if (AetherSerpent.Account.AccountManager.Instance == null)
+            {
+                GameObject accObj = new GameObject("[AccountManager]");
+                accObj.AddComponent<AetherSerpent.Account.AccountManager>();
+            }
+
+            if (AetherSerpent.UI.FreeFireProfileUI.Instance == null)
+            {
+                GameObject profObj = new GameObject("[FreeFireProfileUI]");
+                profObj.AddComponent<AetherSerpent.UI.FreeFireProfileUI>();
+            }
+
             yield return new WaitForSeconds(0.3f);
             UpdateStatus("Validating Universal Render Pipeline & Shaders...", 0.45f);
 

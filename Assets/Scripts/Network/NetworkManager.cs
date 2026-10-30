@@ -42,6 +42,18 @@ namespace AetherSerpent.Network
         public int PingMs => webSocketClient != null ? webSocketClient.PingMs : 0;
         public WebSocketClient.ConnectionState ConnectionState => webSocketClient != null ? webSocketClient.State : WebSocketClient.ConnectionState.Disconnected;
 
+        /// <summary>
+        /// Allows AccountManager to synchronize credentials from Free Fire Account & Identity system.
+        /// </summary>
+        public void SetAuthSession(string token, string refresh, string pId, string uName)
+        {
+            accessToken = token;
+            refreshToken = refresh;
+            playerId = pId;
+            username = uName;
+            Debug.Log($"[NetworkManager] Session synchronized for {username} (PlayerId: {playerId})");
+        }
+
         // Events
         public event Action<WebSocketClient.ConnectionState> OnConnectionStateChanged;
         public event Action<RoomJoinedPayload> OnRoomJoined;

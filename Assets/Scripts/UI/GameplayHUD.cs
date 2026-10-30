@@ -79,6 +79,17 @@ namespace AetherSerpent.UI
             {
                 GameManager.Instance.SetState(GameManager.GameState.Gameplay);
             }
+
+            if (AetherSerpent.Account.AccountManager.Instance == null)
+            {
+                GameObject accObj = new GameObject("[AccountManager]");
+                accObj.AddComponent<AetherSerpent.Account.AccountManager>();
+            }
+            if (FreeFireProfileUI.Instance == null)
+            {
+                GameObject profObj = new GameObject("[FreeFireProfileUI]");
+                profObj.AddComponent<FreeFireProfileUI>();
+            }
         }
 
         private void OnDestroy()
@@ -253,6 +264,17 @@ namespace AetherSerpent.UI
             {
                 GameManager.Instance.SetState(GameManager.GameState.Gameplay);
             }
+
+            if (AetherSerpent.Account.AccountManager.Instance == null)
+            {
+                GameObject accObj = new GameObject("[AccountManager]");
+                accObj.AddComponent<AetherSerpent.Account.AccountManager>();
+            }
+            if (FreeFireProfileUI.Instance == null)
+            {
+                GameObject profObj = new GameObject("[FreeFireProfileUI]");
+                profObj.AddComponent<FreeFireProfileUI>();
+            }
         }
 
         public void RestartGame()
@@ -284,6 +306,21 @@ namespace AetherSerpent.UI
         public void OnQualityChanged(int index)
         {
             QualitySettings.SetQualityLevel(index, true);
+        }
+
+        private void OnGUI()
+        {
+            // HUD Profile quick access button in top-right
+            if (FreeFireProfileUI.Instance != null && !FreeFireProfileUI.Instance.IsVisible)
+            {
+                var acc = AetherSerpent.Account.AccountManager.Instance;
+                string uidStr = acc != null && acc.NumericId > 0 ? $"UID: {acc.NumericId}" : "PROFILE";
+                Rect btnRect = new Rect(Screen.width - 145, 10, 135, 28);
+                if (GUI.Button(btnRect, $"<b>{uidStr} [P]</b>"))
+                {
+                    FreeFireProfileUI.Instance.ToggleVisibility();
+                }
+            }
         }
     }
 }

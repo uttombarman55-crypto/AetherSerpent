@@ -138,3 +138,89 @@ export interface VersionCheckResponse {
   maintenanceMessage?: string;
 }
 
+// Free Fire Style Account & Profile Types
+export interface AccountProfile {
+  playerId: string;
+  numericId: number;
+  username: string;
+  isGuest: boolean;
+  avatarId: number;
+  frameId: number;
+  bannerId: number;
+  bio: string;
+  squadName: string;
+  level: number;
+  exp: number;
+  matchesPlayed: number;
+  totalKills: number;
+  highestScore: number;
+  highestLength: number;
+  favoriteEvolution: number;
+  usernameChangesLeft: number;
+  createdAt: number;
+}
+
+export interface AccountAuthResponse extends AuthResponse {
+  numericId: number;
+  isGuest: boolean;
+  recoveryCode?: string;
+  profile: AccountProfile;
+}
+
+export interface RegisterRequest {
+  username: string;
+  password: string;
+  deviceId: string;
+  turnstileToken?: string;
+}
+
+export interface LoginRequest {
+  username: string;
+  password: string;
+  deviceId?: string;
+}
+
+export interface GuestLoginRequest {
+  deviceId: string;
+  turnstileToken?: string;
+}
+
+export interface UpgradeGuestRequest {
+  username: string;
+  password: string;
+  recoveryCode: string;
+}
+
+export interface RecoverAccountRequest {
+  numericIdOrUsername: string;
+  recoveryCode: string;
+  newPassword: string;
+}
+
+export interface ProfileUpdateRequest {
+  avatarId?: number;
+  frameId?: number;
+  bannerId?: number;
+  bio?: string;
+  squadName?: string;
+}
+
+export interface PrivacySettings {
+  allowInvites: number; // 0=Everyone, 1=Friends Only, 2=Nobody
+  allowMessages: number; // 0=Everyone, 1=Friends Only, 2=Nobody
+  showOnlineStatus: boolean;
+}
+
+export interface BlockedUser {
+  blockedId: string;
+  username: string;
+  numericId: number;
+  blockedAt: number;
+}
+
+export interface ReportPlayerRequest {
+  targetId: string;
+  reason: string;
+  details?: string;
+}
+
