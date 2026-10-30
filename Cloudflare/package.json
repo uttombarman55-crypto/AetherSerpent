@@ -1,0 +1,16 @@
+{
+  "name": "aetherserpent-backend",
+  "version": "1.0.0",
+  "description": "Production-grade Cloudflare Workers + SQLite Durable Objects backend for AetherSerpent_EternalCoil",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev --port 8787",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261030.1",
+    "typescript": "^5.7.2",
+    "wrangler": "^4.156.0"
+  }
+}
