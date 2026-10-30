@@ -345,3 +345,42 @@ export interface ReportPlayerRequest {
   details?: string;
 }
 
+// ==========================================
+// REAL-TIME MULTI-CHANNEL CHAT SYSTEM
+// ==========================================
+export type ChatChannel = 'global' | 'squad' | 'clan' | 'match' | 'whisper' | 'system';
+
+export interface ChatMessage {
+  id: number;
+  channel: ChatChannel;
+  senderId: string;
+  senderName: string;
+  senderNumericId: number;
+  clanTag?: string;
+  squadTag?: string;
+  recipientId?: string;
+  recipientName?: string;
+  targetGroupId?: string;
+  message: string;
+  timestamp: number;
+  isMention?: boolean;
+}
+
+export interface SendChatRequest {
+  channel: ChatChannel;
+  message: string;
+  recipientId?: string;
+  recipientNumericId?: number;
+  recipientName?: string;
+  squadId?: string;
+  clanId?: string;
+  roomId?: string;
+}
+
+export interface ChatHistoryResponse {
+  success: boolean;
+  channel: ChatChannel;
+  messages: ChatMessage[];
+  error?: string;
+}
+

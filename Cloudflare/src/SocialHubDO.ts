@@ -18,7 +18,11 @@ import {
   CloudSaveData,
   AccountProfile,
   PrivacySettings,
-  BlockedUser
+  BlockedUser,
+  ChatChannel,
+  ChatMessage,
+  SendChatRequest,
+  ChatHistoryResponse
 } from './types';
 
 interface Env {
@@ -73,6 +77,48 @@ export function filterProfanity(text: string): string {
   return sanitized;
 }
 
+export const EMOJI_MAP: Record<string, string> = {
+  ':fire:': '🔥',
+  ':snake:': '🐍',
+  ':serpent:': '🐍',
+  ':gg:': '🏆',
+  ':crown:': '👑',
+  ':heart:': '❤️',
+  ':love:': '❤️',
+  ':trophy:': '🏆',
+  ':skull:': '💀',
+  ':dead:': '💀',
+  ':lightning:': '⚡',
+  ':volt:': '⚡',
+  ':shield:': '🛡️',
+  ':star:': '⭐',
+  ':dragon:': '🐉',
+  ':gem:': '💎',
+  ':diamond:': '💎',
+  ':sword:': '⚔️',
+  ':battle:': '⚔️',
+  ':target:': '🎯',
+  ':cool:': '😎',
+  ':smile:': '😊',
+  ':cry:': '😭',
+  ':angry:': '😡',
+  ':thumbsup:': '👍',
+  ':clap:': '👏',
+  ':party:': '🎉',
+  ':sparkles:': '✨',
+  ':aether:': '🌌',
+  ':void:': '🕳️'
+};
+
+export function parseEmojis(text: string): string {
+  if (!text) return '';
+  let result = text;
+  for (const [shortcut, emoji] of Object.entries(EMOJI_MAP)) {
+    result = result.replaceAll(shortcut, emoji);
+  }
+  return result;
+}
+
 async function hashPassword(password: string, salt: string): Promise<string> {
   const enc = new TextEncoder();
   const data = enc.encode(password + ':' + salt);
@@ -107,6 +153,11 @@ function getWeekInfo(date: Date): { year: number; week: number } {
 }
 
 export class SocialHubDO extends DurableObject {
+  private chatSockets = new Map<WebSocket, { playerId: string; username: string; numericId: number; clanId?: string; squadId?: string }>();
+  private lastGlobalChatTimes = new Map<string, number>();
+  private lastChatTimes = new Map<string, number>();
+  private lastMessageHashes = new Map<string, number>();
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
 
@@ -330,6 +381,25 @@ export class SocialHubDO extends DurableObject {
         checksum TEXT NOT NULL,
         updated_at INTEGER NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        channel TEXT NOT NULL,
+        sender_id TEXT NOT NULL,
+        sender_name TEXT NOT NULL,
+        sender_numeric_id INTEGER NOT NULL,
+        clan_tag TEXT,
+        squad_tag TEXT,
+        recipient_id TEXT,
+        recipient_name TEXT,
+        target_group_id TEXT,
+        message TEXT NOT NULL,
+        timestamp INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_chat_channel ON chat_messages(channel, timestamp DESC);
+      CREATE INDEX IF NOT EXISTS idx_chat_target ON chat_messages(target_group_id, timestamp DESC);
+      CREATE INDEX IF NOT EXISTS idx_chat_whisper ON chat_messages(sender_id, recipient_id, timestamp DESC);
     `);
   }
 
@@ -369,11 +439,376 @@ export class SocialHubDO extends DurableObject {
     return this.buildProfileObject(acc, prof);
   }
 
+  private async processChatMessage(
+    sender: { playerId: string; username: string; numericId: number },
+    req: SendChatRequest
+  ): Promise<{ success: boolean; chatMessage?: ChatMessage; error?: string }> {
+    const channel = req.channel || 'global';
+    let rawMsg = ((req.message || (req as any).text) || '').trim();
+    if (!rawMsg) return { success: false, error: 'Message cannot be empty.' };
+    if (rawMsg.length > 250) rawMsg = rawMsg.substring(0, 250);
+
+    const now = Date.now();
+
+    // Filter profanity & parse emojis upfront
+    let cleanMsg = filterProfanity(rawMsg);
+    cleanMsg = parseEmojis(cleanMsg);
+
+    // Global Slow Mode (5s cooldown) via SQLite (persistent across DO hibernation)
+    if (channel === 'global') {
+      const lastGlobalCursor = this.ctx.storage.sql.exec(
+        `SELECT timestamp FROM chat_messages WHERE sender_id = ? AND channel = 'global' ORDER BY timestamp DESC LIMIT 1`,
+        sender.playerId
+      );
+      for (const r of lastGlobalCursor) {
+        const lastGlobal = r.timestamp as number;
+        const elapsed = (now - lastGlobal) / 1000;
+        if (elapsed < 5.0) {
+          const remaining = (5.0 - elapsed).toFixed(1);
+          return { success: false, error: `Global Chat slow mode active. Wait ${remaining}s.` };
+        }
+        break;
+      }
+    } else {
+      // General 0.8s rate limit via SQLite
+      const lastChatCursor = this.ctx.storage.sql.exec(
+        `SELECT timestamp FROM chat_messages WHERE sender_id = ? ORDER BY timestamp DESC LIMIT 1`,
+        sender.playerId
+      );
+      for (const r of lastChatCursor) {
+        const lastChat = r.timestamp as number;
+        if (now - lastChat < 800) {
+          return { success: false, error: 'You are chatting too fast.' };
+        }
+        break;
+      }
+    }
+
+    // Spam duplicate detection (same player, same channel, same message within 15 seconds) via SQLite
+    const recentDupCursor = this.ctx.storage.sql.exec(
+      `SELECT id FROM chat_messages
+       WHERE sender_id = ? AND channel = ? AND LOWER(message) = LOWER(?) AND timestamp > ? LIMIT 1`,
+      sender.playerId, channel, cleanMsg, now - 15000
+    );
+    for (const _ of recentDupCursor) {
+      return { success: false, error: 'Duplicate message blocked to prevent spam.' };
+    }
+
+    // Lookup sender's clan tag & squad tag
+    let clanTag: string | undefined;
+    let squadTag: string | undefined;
+
+    const clanCursor = this.ctx.storage.sql.exec(
+      `SELECT c.tag FROM clan_members cm JOIN clans c ON c.clan_id = cm.clan_id WHERE cm.player_id = ?`,
+      sender.playerId
+    );
+    for (const c of clanCursor) { clanTag = c.tag as string; break; }
+
+    const squadCursor = this.ctx.storage.sql.exec(
+      `SELECT s.tag FROM squad_members sm JOIN squads s ON s.squad_id = sm.squad_id WHERE sm.player_id = ?`,
+      sender.playerId
+    );
+    for (const s of squadCursor) { squadTag = s.tag as string; break; }
+
+    // Whisper Channel validation
+    let recipientId = req.recipientId;
+    let recipientName = req.recipientName;
+    const recipientNumId = req.recipientNumericId || (req as any).targetNumericId;
+    const recipientUName = req.recipientName || (req as any).targetName;
+    if (channel === 'whisper') {
+      if (!recipientId && recipientNumId) {
+        const rCursor = this.ctx.storage.sql.exec(`SELECT id, username FROM accounts WHERE numeric_id = ?`, recipientNumId);
+        for (const r of rCursor) { recipientId = r.id as string; recipientName = r.username as string; break; }
+      } else if (!recipientId && recipientUName) {
+        const rCursor = this.ctx.storage.sql.exec(`SELECT id, username FROM accounts WHERE username = ? COLLATE NOCASE`, recipientUName);
+        for (const r of rCursor) { recipientId = r.id as string; recipientName = r.username as string; break; }
+      }
+
+      if (!recipientId) return { success: false, error: 'Recipient player not found for whisper.' };
+      if (recipientId === sender.playerId) return { success: false, error: 'Cannot whisper to yourself.' };
+
+      // Blocked check
+      const blockCheck = this.ctx.storage.sql.exec(
+        `SELECT * FROM blocked_players WHERE player_id = ? AND blocked_id = ?`,
+        recipientId, sender.playerId
+      );
+      for (const _ of blockCheck) {
+        return { success: false, error: 'Message could not be delivered to this player.' };
+      }
+
+      // Privacy check
+      const privCheck = this.ctx.storage.sql.exec(
+        `SELECT allow_messages FROM privacy_settings WHERE player_id = ?`,
+        recipientId
+      );
+      for (const p of privCheck) {
+        if ((p.allow_messages as number) === 2) {
+          return { success: false, error: 'This player has private whispers disabled.' };
+        }
+        if ((p.allow_messages as number) === 1) {
+          const fCheck = this.ctx.storage.sql.exec(
+            `SELECT * FROM friends WHERE player_id = ? AND friend_id = ?`,
+            recipientId, sender.playerId
+          );
+          let isFriend = false;
+          for (const _ of fCheck) { isFriend = true; break; }
+          if (!isFriend) {
+            return { success: false, error: 'This player only accepts private whispers from friends.' };
+          }
+        }
+      }
+    }
+
+    let targetGroupId = req.roomId || req.squadId || req.clanId;
+    if (channel === 'squad' && !targetGroupId) {
+      const smCursor = this.ctx.storage.sql.exec(`SELECT squad_id FROM squad_members WHERE player_id = ?`, sender.playerId);
+      for (const sm of smCursor) { targetGroupId = sm.squad_id as string; break; }
+    }
+    if (channel === 'clan' && !targetGroupId) {
+      const cmCursor = this.ctx.storage.sql.exec(`SELECT clan_id FROM clan_members WHERE player_id = ?`, sender.playerId);
+      for (const cm of cmCursor) { targetGroupId = cm.clan_id as string; break; }
+    }
+
+    // Save to SQLite chat_messages table
+    this.ctx.storage.sql.exec(
+      `INSERT INTO chat_messages (channel, sender_id, sender_name, sender_numeric_id, clan_tag, squad_tag, recipient_id, recipient_name, target_group_id, message, timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      channel,
+      sender.playerId,
+      sender.username,
+      sender.numericId,
+      clanTag || null,
+      squadTag || null,
+      recipientId || null,
+      recipientName || null,
+      targetGroupId || null,
+      cleanMsg,
+      now
+    );
+
+    const lastIdCursor = this.ctx.storage.sql.exec(`SELECT last_insert_rowid() AS id`);
+    let msgId = now;
+    for (const r of lastIdCursor) { msgId = (r.id as number) || now; break; }
+
+    const chatMessage: ChatMessage = {
+      id: msgId,
+      channel,
+      senderId: sender.playerId,
+      senderName: sender.username,
+      senderNumericId: sender.numericId,
+      clanTag,
+      squadTag,
+      recipientId,
+      recipientName,
+      targetGroupId,
+      message: cleanMsg,
+      timestamp: now,
+    };
+
+    // Broadcast to connected WebSockets
+    this.broadcastChat(chatMessage);
+
+    return { success: true, chatMessage };
+  }
+
+  private broadcastChat(msg: ChatMessage) {
+    const payloadStr = JSON.stringify({ type: 'CHAT_BROADCAST', payload: msg, timestamp: Date.now() });
+
+    for (const [ws, info] of this.chatSockets.entries()) {
+      try {
+        if (msg.channel === 'global') {
+          ws.send(payloadStr);
+        } else if (msg.channel === 'whisper') {
+          if (info.playerId === msg.senderId || info.playerId === msg.recipientId) {
+            ws.send(payloadStr);
+          }
+        } else if (msg.channel === 'squad') {
+          if (info.playerId === msg.senderId || (msg.targetGroupId && info.squadId === msg.targetGroupId)) {
+            ws.send(payloadStr);
+          }
+        } else if (msg.channel === 'clan') {
+          if (info.playerId === msg.senderId || (msg.targetGroupId && info.clanId === msg.targetGroupId)) {
+            ws.send(payloadStr);
+          }
+        } else if (msg.channel === 'match') {
+          ws.send(payloadStr);
+        }
+      } catch {
+        this.chatSockets.delete(ws);
+      }
+    }
+  }
+
+  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    try {
+      const text = typeof message === 'string' ? message : new TextDecoder().decode(message);
+      const data = JSON.parse(text);
+
+      if (data.type === 'PING') {
+        ws.send(JSON.stringify({ type: 'PONG', timestamp: Date.now() }));
+        return;
+      }
+
+      if (data.type === 'CHAT_SEND') {
+        const session = this.chatSockets.get(ws);
+        if (!session) return;
+        const res = await this.processChatMessage(session, data.payload as SendChatRequest);
+        if (!res.success) {
+          ws.send(JSON.stringify({ type: 'CHAT_ERROR', error: res.error, timestamp: Date.now() }));
+        }
+      }
+    } catch {
+      // Ignore malformed packet
+    }
+  }
+
+  async webSocketClose(ws: WebSocket): Promise<void> {
+    this.chatSockets.delete(ws);
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
 
     try {
+      // ---------------------------------------------------------
+      // 0. REAL-TIME CHAT WEBSOCKET & REST ENDPOINTS
+      // ---------------------------------------------------------
+
+      // WebSocket Upgrade for Real-Time Chat
+      if (path === '/chat/ws') {
+        const upgradeHeader = request.headers.get('Upgrade');
+        if (!upgradeHeader || upgradeHeader.toLowerCase() !== 'websocket') {
+          return new Response('Expected Upgrade: websocket', { status: 426 });
+        }
+
+        const playerId = url.searchParams.get('playerId') || `usr_${crypto.randomUUID().substring(0, 8)}`;
+        const username = url.searchParams.get('username') || 'Drifter';
+        const numCursor = this.ctx.storage.sql.exec(`SELECT numeric_id FROM accounts WHERE id = ?`, playerId);
+        let numericId = 0;
+        for (const n of numCursor) { numericId = (n.numeric_id as number) || 0; break; }
+
+        let clanId: string | undefined;
+        let squadId: string | undefined;
+        const cmCursor = this.ctx.storage.sql.exec(`SELECT clan_id FROM clan_members WHERE player_id = ?`, playerId);
+        for (const cm of cmCursor) { clanId = cm.clan_id as string; break; }
+        const smCursor = this.ctx.storage.sql.exec(`SELECT squad_id FROM squad_members WHERE player_id = ?`, playerId);
+        for (const sm of smCursor) { squadId = sm.squad_id as string; break; }
+
+        const pair = new WebSocketPair();
+        const [client, server] = Object.values(pair);
+
+        this.ctx.acceptWebSocket(server);
+        this.chatSockets.set(server, { playerId, username, numericId, clanId, squadId });
+
+        server.send(JSON.stringify({
+          type: 'CHAT_CONNECTED',
+          playerId,
+          username,
+          numericId,
+          timestamp: Date.now()
+        }));
+
+        return new Response(null, { status: 101, webSocket: client });
+      }
+
+      // REST: Send Chat Message
+      if (path === '/chat/send' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as SendChatRequest & { playerId?: string; username?: string };
+        const playerId = body.playerId || url.searchParams.get('playerId') || '';
+        if (!playerId) return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+
+        const accCursor = this.ctx.storage.sql.exec(`SELECT username, numeric_id FROM accounts WHERE id = ?`, playerId);
+        let uName = body.username || 'Drifter';
+        let numId = 0;
+        for (const a of accCursor) { uName = (a.username as string) || uName; numId = (a.numeric_id as number) || 0; break; }
+
+        const res = await this.processChatMessage({ playerId, username: uName, numericId: numId }, body);
+        if (!res.success) {
+          return Response.json({ success: false, error: res.error }, { status: 400 });
+        }
+        return Response.json({ success: true, message: res.chatMessage });
+      }
+
+      // REST: Chat History
+      if (path === '/chat/history' && request.method === 'GET') {
+        const channel = (url.searchParams.get('channel') || 'global') as ChatChannel;
+        const targetId = url.searchParams.get('targetId');
+        const peerId = url.searchParams.get('peerId');
+        const playerId = url.searchParams.get('playerId') || '';
+        const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '50', 10), 1), 100);
+
+        let cursor;
+        if (channel === 'whisper') {
+          let actualPeerId = peerId;
+          const peerNumericId = url.searchParams.get('peerNumericId') || url.searchParams.get('targetNumericId');
+          if (!actualPeerId && peerNumericId) {
+            const pCursor = this.ctx.storage.sql.exec(`SELECT id FROM accounts WHERE numeric_id = ?`, parseInt(peerNumericId, 10));
+            for (const p of pCursor) { actualPeerId = p.id as string; break; }
+          }
+          if (!playerId || !actualPeerId) return Response.json({ success: true, channel, count: 0, messages: [] });
+          cursor = this.ctx.storage.sql.exec(
+            `SELECT * FROM chat_messages
+             WHERE channel = 'whisper'
+               AND ((sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?))
+             ORDER BY timestamp DESC LIMIT ?`,
+            playerId, actualPeerId, actualPeerId, playerId, limit
+          );
+        } else if (channel === 'squad') {
+          let sqId = targetId;
+          if (!sqId && playerId) {
+            const sqCursor = this.ctx.storage.sql.exec(`SELECT squad_id FROM squad_members WHERE player_id = ?`, playerId);
+            for (const s of sqCursor) { sqId = s.squad_id as string; break; }
+          }
+          if (!sqId) return Response.json({ success: true, channel, count: 0, messages: [] });
+          cursor = this.ctx.storage.sql.exec(
+            `SELECT * FROM chat_messages WHERE channel = 'squad' AND target_group_id = ? ORDER BY timestamp DESC LIMIT ?`,
+            sqId, limit
+          );
+        } else if (channel === 'clan') {
+          let clId = targetId;
+          if (!clId && playerId) {
+            const clCursor = this.ctx.storage.sql.exec(`SELECT clan_id FROM clan_members WHERE player_id = ?`, playerId);
+            for (const c of clCursor) { clId = c.clan_id as string; break; }
+          }
+          if (!clId) return Response.json({ success: true, channel, count: 0, messages: [] });
+          cursor = this.ctx.storage.sql.exec(
+            `SELECT * FROM chat_messages WHERE channel = 'clan' AND target_group_id = ? ORDER BY timestamp DESC LIMIT ?`,
+            clId, limit
+          );
+        } else if (targetId) {
+          cursor = this.ctx.storage.sql.exec(
+            `SELECT * FROM chat_messages WHERE channel = ? AND target_group_id = ? ORDER BY timestamp DESC LIMIT ?`,
+            channel, targetId, limit
+          );
+        } else {
+          cursor = this.ctx.storage.sql.exec(
+            `SELECT * FROM chat_messages WHERE channel = ? ORDER BY timestamp DESC LIMIT ?`,
+            channel, limit
+          );
+        }
+
+        const messages: ChatMessage[] = [];
+        for (const r of cursor) {
+          messages.push({
+            id: r.id as number,
+            channel: r.channel as ChatChannel,
+            senderId: r.sender_id as string,
+            senderName: r.sender_name as string,
+            senderNumericId: r.sender_numeric_id as number,
+            clanTag: (r.clan_tag as string) || undefined,
+            squadTag: (r.squad_tag as string) || undefined,
+            recipientId: (r.recipient_id as string) || undefined,
+            recipientName: (r.recipient_name as string) || undefined,
+            targetGroupId: (r.target_group_id as string) || undefined,
+            message: r.message as string,
+            timestamp: r.timestamp as number,
+          });
+        }
+
+        messages.reverse();
+        return Response.json({ success: true, channel, count: messages.length, messages });
+      }
       // ---------------------------------------------------------
       // 1. ACCOUNT SYSTEM ENDPOINTS
       // ---------------------------------------------------------
@@ -896,9 +1331,13 @@ export class SocialHubDO extends DurableObject {
 
       // Block / Unblock Player
       if (path === '/profile/block' && request.method === 'POST') {
-        const body = (await request.json().catch(() => ({}))) as { playerId?: string; targetId?: string };
+        const body = (await request.json().catch(() => ({}))) as { playerId?: string; targetId?: string; targetNumericId?: number };
         const playerId = body.playerId || url.searchParams.get('playerId') || '';
-        const targetId = body.targetId || '';
+        let targetId = body.targetId || '';
+        if (!targetId && body.targetNumericId) {
+          const tCursor = this.ctx.storage.sql.exec(`SELECT id FROM accounts WHERE numeric_id = ?`, body.targetNumericId);
+          for (const t of tCursor) { targetId = t.id as string; break; }
+        }
         if (!playerId || !targetId) return Response.json({ success: false, error: 'Missing parameters' }, { status: 400 });
 
         this.ctx.storage.sql.exec(
@@ -1591,6 +2030,40 @@ export class SocialHubDO extends DurableObject {
 
         this.ctx.storage.sql.exec(`UPDATE squad_members SET is_ready = ? WHERE player_id = ?`, isReady, playerId);
         return Response.json({ success: true, isReady: isReady === 1 });
+      }
+
+      // Direct Join Squad
+      if (path === '/squad/join' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as { playerId?: string; squadId?: string };
+        const playerId = body.playerId || url.searchParams.get('playerId') || '';
+        const squadId = body.squadId || '';
+
+        if (!playerId || !squadId) return Response.json({ success: false, error: 'Invalid parameters' }, { status: 400 });
+
+        const sCursor = this.ctx.storage.sql.exec(`SELECT * FROM squads WHERE squad_id = ?`, squadId);
+        let sRow: Record<string, unknown> | null = null;
+        for (const s of sCursor) { sRow = s; break; }
+        if (!sRow) return Response.json({ success: false, error: 'Squad not found' }, { status: 404 });
+
+        const countCursor = this.ctx.storage.sql.exec(`SELECT COUNT(*) AS count FROM squad_members WHERE squad_id = ?`, squadId);
+        let count = 0;
+        for (const c of countCursor) { count = c.count as number; break; }
+        if (count >= 5) return Response.json({ success: false, error: 'Squad is full' }, { status: 409 });
+
+        this.ctx.storage.sql.exec(`DELETE FROM squad_members WHERE player_id = ?`, playerId);
+
+        const accCursor = this.ctx.storage.sql.exec(`SELECT username, numeric_id FROM accounts WHERE id = ?`, playerId);
+        let uName = 'Drifter';
+        let numId = 0;
+        for (const a of accCursor) { uName = a.username as string; numId = a.numeric_id as number; break; }
+
+        this.ctx.storage.sql.exec(
+          `INSERT INTO squad_members (squad_id, player_id, username, numeric_id, role, is_ready, joined_at)
+           VALUES (?, ?, ?, ?, 'member', 0, ?)`,
+          squadId, playerId, uName, numId, Date.now()
+        );
+
+        return Response.json({ success: true, squadId });
       }
 
       // Leave Squad

@@ -218,6 +218,30 @@ export class GameRoomDO extends DurableObject {
         case 'PING':
           ws.send(JSON.stringify({ type: 'PONG', timestamp: Date.now(), clientTime: data.timestamp }));
           break;
+
+        case 'CHAT_MESSAGE': {
+          const chatPayload = data.payload as { message: string; squadTag?: string; clanTag?: string };
+          if (chatPayload && typeof chatPayload.message === 'string' && chatPayload.message.trim()) {
+            const rawMsg = chatPayload.message.trim().substring(0, 150);
+            const chatBroadcast = {
+              type: 'CHAT_BROADCAST',
+              payload: {
+                id: Date.now(),
+                channel: 'match',
+                senderId: session.playerId,
+                senderName: session.username,
+                senderNumericId: 0,
+                squadTag: chatPayload.squadTag || undefined,
+                clanTag: chatPayload.clanTag || undefined,
+                message: rawMsg,
+                timestamp: Date.now()
+              },
+              timestamp: Date.now()
+            };
+            this.broadcast(chatBroadcast);
+          }
+          break;
+        }
       }
     } catch {
       // Ignore malformed packets

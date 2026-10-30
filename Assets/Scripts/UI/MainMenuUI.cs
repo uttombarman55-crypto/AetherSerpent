@@ -56,6 +56,16 @@ namespace AetherSerpent.UI
                 GameObject sUiObj = new GameObject("[FreeFireSocialUI]");
                 sUiObj.AddComponent<FreeFireSocialUI>();
             }
+            if (AetherSerpent.Social.ChatManager.Instance == null)
+            {
+                GameObject chatObj = new GameObject("[ChatManager]");
+                chatObj.AddComponent<AetherSerpent.Social.ChatManager>();
+            }
+            if (FreeFireChatUI.Instance == null)
+            {
+                GameObject cUiObj = new GameObject("[FreeFireChatUI]");
+                cUiObj.AddComponent<FreeFireChatUI>();
+            }
         }
 
         public void OnPlayClicked()
@@ -144,6 +154,12 @@ namespace AetherSerpent.UI
                     {
                         SocialAndLeaderboardUI.Instance.ToggleVisibility();
                     }
+                }
+
+                GUILayout.Space(6);
+                if (GUILayout.Button("TEXT CHAT [C / Enter]", GUILayout.Height(30)))
+                {
+                    FreeFireChatUI.Instance?.ToggleVisibility();
                 }
 
                 GUILayout.Space(6);

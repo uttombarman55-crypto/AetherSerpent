@@ -100,6 +100,16 @@ namespace AetherSerpent.UI
                 GameObject sUiObj = new GameObject("[FreeFireSocialUI]");
                 sUiObj.AddComponent<FreeFireSocialUI>();
             }
+            if (AetherSerpent.Social.ChatManager.Instance == null)
+            {
+                GameObject chatObj = new GameObject("[ChatManager]");
+                chatObj.AddComponent<AetherSerpent.Social.ChatManager>();
+            }
+            if (FreeFireChatUI.Instance == null)
+            {
+                GameObject cUiObj = new GameObject("[FreeFireChatUI]");
+                cUiObj.AddComponent<FreeFireChatUI>();
+            }
         }
 
         private void OnDestroy()
@@ -295,6 +305,16 @@ namespace AetherSerpent.UI
                 GameObject sUiObj = new GameObject("[FreeFireSocialUI]");
                 sUiObj.AddComponent<FreeFireSocialUI>();
             }
+            if (AetherSerpent.Social.ChatManager.Instance == null)
+            {
+                GameObject chatObj = new GameObject("[ChatManager]");
+                chatObj.AddComponent<AetherSerpent.Social.ChatManager>();
+            }
+            if (FreeFireChatUI.Instance == null)
+            {
+                GameObject cUiObj = new GameObject("[FreeFireChatUI]");
+                cUiObj.AddComponent<FreeFireChatUI>();
+            }
         }
 
         public void RestartGame()
@@ -332,20 +352,27 @@ namespace AetherSerpent.UI
         {
             // HUD Profile & Social quick access buttons in top-right
             if ((FreeFireProfileUI.Instance == null || !FreeFireProfileUI.Instance.IsVisible) &&
-                (FreeFireSocialUI.Instance == null || !FreeFireSocialUI.Instance.IsVisible))
+                (FreeFireSocialUI.Instance == null || !FreeFireSocialUI.Instance.IsVisible) &&
+                (FreeFireChatUI.Instance == null || !FreeFireChatUI.Instance.IsVisible))
             {
                 var acc = AetherSerpent.Account.AccountManager.Instance;
                 string uidStr = acc != null && acc.NumericId > 0 ? $"UID: {acc.NumericId}" : "PROFILE";
-                Rect profileRect = new Rect(Screen.width - 275, 10, 130, 28);
+                Rect profileRect = new Rect(Screen.width - 390, 10, 120, 28);
                 if (GUI.Button(profileRect, $"<b>{uidStr} [P]</b>"))
                 {
                     FreeFireProfileUI.Instance?.ToggleVisibility();
                 }
 
-                Rect socialRect = new Rect(Screen.width - 140, 10, 130, 28);
+                Rect socialRect = new Rect(Screen.width - 260, 10, 120, 28);
                 if (GUI.Button(socialRect, "<b>SOCIAL [L]</b>"))
                 {
                     FreeFireSocialUI.Instance?.ToggleVisibility();
+                }
+
+                Rect chatRect = new Rect(Screen.width - 130, 10, 120, 28);
+                if (GUI.Button(chatRect, "<b>CHAT [C]</b>"))
+                {
+                    FreeFireChatUI.Instance?.ToggleVisibility();
                 }
             }
         }

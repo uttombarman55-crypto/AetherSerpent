@@ -93,6 +93,18 @@ namespace AetherSerpent.Core
                 sUiObj.AddComponent<AetherSerpent.UI.FreeFireSocialUI>();
             }
 
+            if (AetherSerpent.Social.ChatManager.Instance == null)
+            {
+                GameObject chatObj = new GameObject("[ChatManager]");
+                chatObj.AddComponent<AetherSerpent.Social.ChatManager>();
+            }
+
+            if (AetherSerpent.UI.FreeFireChatUI.Instance == null)
+            {
+                GameObject cUiObj = new GameObject("[FreeFireChatUI]");
+                cUiObj.AddComponent<AetherSerpent.UI.FreeFireChatUI>();
+            }
+
             yield return new WaitForSeconds(0.3f);
             UpdateStatus("Validating Universal Render Pipeline & Shaders...", 0.45f);
 

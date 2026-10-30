@@ -469,10 +469,30 @@ export default {
         return stub.fetch(request);
       }
 
-      // 9. Social Hub (Leaderboards, Friends, Parties, Cloud Saves)
+      // 8.5. Real-Time Chat WebSocket Upgrade
+      if (url.pathname === '/api/chat/ws') {
+        const token = url.searchParams.get('token') || request.headers.get('Authorization')?.replace('Bearer ', '');
+        let playerPayload: { sub: string; username: string } | null = null;
+        if (token) {
+          playerPayload = await AuthService.verifyJWT(token, env.JWT_SECRET);
+        }
+
+        const internalUrl = new URL(request.url);
+        internalUrl.pathname = '/chat/ws';
+        if (playerPayload) {
+          internalUrl.searchParams.set('playerId', playerPayload.sub);
+          internalUrl.searchParams.set('username', playerPayload.username);
+        }
+
+        const reqProxy = new Request(internalUrl.toString(), request);
+        return socialStub.fetch(reqProxy);
+      }
+
+      // 9. Social Hub (Leaderboards, Friends, Parties, Chat, Cloud Saves)
       if (
         url.pathname.startsWith('/api/leaderboard/') ||
         url.pathname.startsWith('/api/social/') ||
+        url.pathname.startsWith('/api/chat/') ||
         url.pathname.startsWith('/api/save/')
       ) {
         const authHeader = request.headers.get('Authorization');
@@ -483,7 +503,11 @@ export default {
           playerPayload = await AuthService.verifyJWT(token, env.JWT_SECRET);
         }
 
-        const isPublicRead = request.method === 'GET' && (url.pathname.startsWith('/api/leaderboard/') || url.pathname === '/api/social/clan/list');
+        const isPublicRead = request.method === 'GET' && (
+          url.pathname.startsWith('/api/leaderboard/') ||
+          url.pathname === '/api/social/clan/list' ||
+          url.pathname.startsWith('/api/chat/history')
+        );
         if (!isPublicRead && !playerPayload) {
           return Response.json({ error: 'Authorization required for this endpoint.' }, {
             status: 401,
@@ -493,6 +517,7 @@ export default {
 
         let internalPath = url.pathname.replace('/api/leaderboard', '/leaderboard')
                                        .replace('/api/social', '')
+                                       .replace('/api/chat', '/chat')
                                        .replace('/api/save', '/save');
         if (url.pathname === '/api/leaderboard/submit') {
           internalPath = '/submit-score';
