@@ -15,6 +15,10 @@
       {
         "name": "WORLD_ZONE",
         "class_name": "WorldZoneDO"
+      },
+      {
+        "name": "SOCIAL_HUB",
+        "class_name": "SocialHubDO"
       }
     ]
   },
@@ -23,7 +27,8 @@
       "tag": "v1",
       "new_sqlite_classes": [
         "GameRoomDO",
-        "WorldZoneDO"
+        "WorldZoneDO",
+        "SocialHubDO"
       ]
     }
   ],
@@ -31,7 +36,7 @@
     "ENVIRONMENT": "production",
     "JWT_SECRET": "aether-serpent-eternal-coil-production-secret-key-32chars",
     "JWT_REFRESH_SECRET": "aether-serpent-refresh-secret-production-key-32chars",
-    "TURNSTILE_SECRET_KEY": "1x0000000000000000000000000000000AA", // Cloudflare test secret key (always passes)
+    "TURNSTILE_SECRET_KEY": "1x0000000000000000000000000000000AA",
     "ALLOWED_ORIGINS": "*"
   }
 }

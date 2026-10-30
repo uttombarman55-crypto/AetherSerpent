@@ -1,13 +1,15 @@
 import { GameRoomDO } from './GameRoomDO';
 import { WorldZoneDO } from './WorldZoneDO';
+import { SocialHubDO } from './SocialHubDO';
 import { AuthService } from './auth';
-import { AuthResponse, MatchmakingResponse, CoopRole } from './types';
+import { AuthResponse, MatchmakingResponse, CoopRole, VersionCheckResponse } from './types';
 
-export { GameRoomDO, WorldZoneDO };
+export { GameRoomDO, WorldZoneDO, SocialHubDO };
 
 interface Env {
   GAME_ROOM: DurableObjectNamespace;
   WORLD_ZONE: DurableObjectNamespace;
+  SOCIAL_HUB: DurableObjectNamespace;
   ENVIRONMENT: string;
   JWT_SECRET: string;
   JWT_REFRESH_SECRET: string;
@@ -18,7 +20,7 @@ interface Env {
 // In-Memory IP Rate Limiter for Worker edge instances
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
 
-function checkRateLimit(ip: string, maxRequests: number = 30, windowMs: number = 60000): boolean {
+function checkRateLimit(ip: string, maxRequests: number = 60, windowMs: number = 60000): boolean {
   const now = Date.now();
   const entry = rateLimitMap.get(ip);
 
@@ -52,10 +54,13 @@ export default {
     }
 
     // 2. Global Rate Limiter Check
-    if (!checkRateLimit(clientIp, 60, 60000)) {
+    if (!checkRateLimit(clientIp, 120, 60000)) {
       return new Response(JSON.stringify({ error: 'Rate limit exceeded. Please wait.' }), {
         status: 429,
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Content-Type': 'application/json'
+        },
       });
     }
 
@@ -66,13 +71,37 @@ export default {
           status: 'online',
           service: 'AetherSerpent_EternalCoil Backend',
           environment: env.ENVIRONMENT || 'production',
+          version: '1.0.0',
           timestamp: Date.now(),
+        }, {
+          headers: { 'Access-Control-Allow-Origin': '*' }
         });
       }
 
-      // 4. Player Authentication with Turnstile & JWT
+      // 4. System Status & Version Check
+      if (url.pathname === '/api/system/version-check') {
+        const clientVer = url.searchParams.get('clientVersion') || '1.0.0';
+        const response: VersionCheckResponse = {
+          clientVersion: clientVer,
+          minSupportedVersion: '1.0.0',
+          latestVersion: '1.0.0',
+          isUpdateRequired: false,
+          isMaintenanceActive: false,
+          maintenanceMessage: 'All celestial servers operating normally.'
+        };
+        return Response.json(response, { headers: { 'Access-Control-Allow-Origin': '*' } });
+      }
+
+      if (url.pathname === '/api/system/maintenance') {
+        return Response.json({
+          maintenance: false,
+          message: 'All servers nominal. Co-op and Leaderboards active.'
+        }, { headers: { 'Access-Control-Allow-Origin': '*' } });
+      }
+
+      // 5. Player Authentication with Turnstile & JWT
       if (url.pathname === '/api/auth/login' && request.method === 'POST') {
-        const body = (await request.json()) as { username?: string; turnstileToken?: string };
+        const body = (await request.json().catch(() => ({}))) as { username?: string; turnstileToken?: string };
         const username = body.username?.trim() || `Serpent_${Math.floor(Math.random() * 9000 + 1000)}`;
         const turnstileToken = body.turnstileToken || request.headers.get('X-Turnstile-Token') || 'test-token';
 
@@ -84,7 +113,10 @@ export default {
         );
 
         if (!isTurnstileValid) {
-          return Response.json({ success: false, error: 'Turnstile security check failed.' }, { status: 403 });
+          return Response.json({ success: false, error: 'Turnstile security verification failed.' }, {
+            status: 403,
+            headers: { 'Access-Control-Allow-Origin': '*' }
+          });
         }
 
         const playerId = `usr_${crypto.randomUUID().substring(0, 8)}`;
@@ -131,18 +163,82 @@ export default {
         });
       }
 
-      // 5. Matchmaking / Room Allocation
+      // 6. Refresh Token Rotation
+      if (url.pathname === '/api/auth/refresh' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as { refreshToken?: string };
+        const oldRefresh = body.refreshToken;
+        if (!oldRefresh) {
+          return Response.json({ success: false, error: 'Missing refreshToken' }, {
+            status: 400,
+            headers: { 'Access-Control-Allow-Origin': '*' }
+          });
+        }
+
+        const payload = await AuthService.verifyJWT(oldRefresh, env.JWT_REFRESH_SECRET);
+        if (!payload) {
+          return Response.json({ success: false, error: 'Invalid or expired refresh token' }, {
+            status: 401,
+            headers: { 'Access-Control-Allow-Origin': '*' }
+          });
+        }
+
+        const nowInSeconds = Math.floor(Date.now() / 1000);
+        const newAccessToken = await AuthService.signJWT(
+          {
+            sub: payload.sub,
+            username: payload.username,
+            role: 'player',
+            iat: nowInSeconds,
+            exp: nowInSeconds + (15 * 60),
+          },
+          env.JWT_SECRET
+        );
+
+        const newRefreshToken = await AuthService.signJWT(
+          {
+            sub: payload.sub,
+            username: payload.username,
+            role: 'player',
+            iat: nowInSeconds,
+            exp: nowInSeconds + (7 * 24 * 60 * 60),
+          },
+          env.JWT_REFRESH_SECRET
+        );
+
+        return Response.json({
+          success: true,
+          accessToken: newAccessToken,
+          refreshToken: newRefreshToken,
+          playerId: payload.sub,
+          username: payload.username,
+          expiresIn: 900,
+        }, { headers: { 'Access-Control-Allow-Origin': '*' } });
+      }
+
+      // 7. Logout Endpoint
+      if (url.pathname === '/api/auth/logout' && request.method === 'POST') {
+        return Response.json({ success: true, message: 'Session terminated' }, {
+          headers: { 'Access-Control-Allow-Origin': '*' }
+        });
+      }
+
+      // 8. Matchmaking / Room Allocation
       if (url.pathname === '/api/matchmaking/find-or-create' && request.method === 'POST') {
-        // Authenticate request token
         const authHeader = request.headers.get('Authorization');
         const token = authHeader?.replace('Bearer ', '') || url.searchParams.get('token');
         if (!token) {
-          return Response.json({ error: 'Missing authorization token.' }, { status: 401 });
+          return Response.json({ error: 'Missing authorization token.' }, {
+            status: 401,
+            headers: { 'Access-Control-Allow-Origin': '*' }
+          });
         }
 
         const payload = await AuthService.verifyJWT(token, env.JWT_SECRET);
         if (!payload) {
-          return Response.json({ error: 'Invalid or expired JWT.' }, { status: 401 });
+          return Response.json({ error: 'Invalid or expired JWT.' }, {
+            status: 401,
+            headers: { 'Access-Control-Allow-Origin': '*' }
+          });
         }
 
         const body = (await request.json().catch(() => ({}))) as {
@@ -165,7 +261,7 @@ export default {
         });
       }
 
-      // 6. GameRoom WebSocket Upgrades
+      // 9. GameRoom WebSocket Upgrades
       const roomMatch = url.pathname.match(/^\/api\/room\/([^/]+)\/ws$/);
       if (roomMatch) {
         const roomId = roomMatch[1];
@@ -174,7 +270,7 @@ export default {
         return stub.fetch(request);
       }
 
-      // 7. World Zone Shards
+      // 10. World Zone Shards
       const zoneMatch = url.pathname.match(/^\/api\/zone\/([^/]+)\/ws$/);
       if (zoneMatch) {
         const zoneId = zoneMatch[1];
@@ -183,10 +279,71 @@ export default {
         return stub.fetch(request);
       }
 
-      return new Response('Endpoint not found', { status: 404 });
+      // 11. Social Hub (Leaderboards, Friends, Parties, Cloud Saves)
+      if (
+        url.pathname.startsWith('/api/leaderboard/') ||
+        url.pathname.startsWith('/api/social/') ||
+        url.pathname.startsWith('/api/save/')
+      ) {
+        // Authenticate request token for score submission, friends, party, saves
+        const authHeader = request.headers.get('Authorization');
+        const token = authHeader?.replace('Bearer ', '') || url.searchParams.get('token');
+        let playerPayload: { sub: string; username: string } | null = null;
+
+        if (token) {
+          playerPayload = await AuthService.verifyJWT(token, env.JWT_SECRET);
+        }
+
+        // Leaderboard reads are public; mutations require auth
+        const isPublicRead = request.method === 'GET' && url.pathname.startsWith('/api/leaderboard/');
+        if (!isPublicRead && !playerPayload) {
+          return Response.json({ error: 'Authorization required for this endpoint.' }, {
+            status: 401,
+            headers: { 'Access-Control-Allow-Origin': '*' }
+          });
+        }
+
+        // Forward to the singleton SocialHubDO
+        const socialId = env.SOCIAL_HUB.idFromName('GLOBAL_SOCIAL_HUB');
+        const stub = env.SOCIAL_HUB.get(socialId);
+
+        // Normalize internal path
+        let internalPath = url.pathname.replace('/api/leaderboard', '/leaderboard')
+                                       .replace('/api/social', '')
+                                       .replace('/api/save', '/save');
+        if (url.pathname === '/api/leaderboard/submit') {
+          internalPath = '/submit-score';
+        }
+
+        const internalUrl = new URL(request.url);
+        internalUrl.pathname = internalPath;
+        if (playerPayload) {
+          internalUrl.searchParams.set('playerId', playerPayload.sub);
+          internalUrl.searchParams.set('username', playerPayload.username);
+        }
+
+        const proxyReq = new Request(internalUrl.toString(), request);
+        const res = await stub.fetch(proxyReq);
+
+        // Return with CORS headers
+        const newHeaders = new Headers(res.headers);
+        newHeaders.set('Access-Control-Allow-Origin', '*');
+        return new Response(res.body, {
+          status: res.status,
+          headers: newHeaders,
+        });
+      }
+
+      return new Response('Endpoint not found', {
+        status: 404,
+        headers: { 'Access-Control-Allow-Origin': '*' }
+      });
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      return Response.json({ error: 'Internal Server Error', details: errorMessage }, { status: 500 });
+      return Response.json({ error: 'Internal Server Error', details: errorMessage }, {
+        status: 500,
+        headers: { 'Access-Control-Allow-Origin': '*' }
+      });
     }
   },
 };

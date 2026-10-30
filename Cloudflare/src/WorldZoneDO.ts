@@ -43,3 +43,4 @@ export class WorldZoneDO extends DurableObject {
     return new Response('WorldZoneDO Active', { status: 200 });
   }
 }
+

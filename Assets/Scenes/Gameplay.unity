@@ -136,6 +136,7 @@ GameObject:
   - component: {fileID: 104}
   - component: {fileID: 105}
   - component: {fileID: 106}
+  - component: {fileID: 107}
   m_Layer: 0
   m_Name: Main Camera
   m_TagString: MainCamera
@@ -291,6 +292,18 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c3000000000000000000000000000001, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+--- !u!114 &107
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 100}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c2000000000000000000000000000003, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier:  
 --- !u!1 &200
 GameObject:
   m_ObjectHideFlags: 0
@@ -447,6 +460,9 @@ GameObject:
   - component: {fileID: 404}
   - component: {fileID: 405}
   - component: {fileID: 406}
+  - component: {fileID: 407}
+  - component: {fileID: 408}
+  - component: {fileID: 409}
   m_Layer: 0
   m_Name: Sanctuary_Arena
   m_TagString: Untagged
@@ -534,9 +550,45 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c7000000000000000000000000000003, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  backendHttpUrl: http://127.0.0.1:8787
+  backendHttpUrl: https://aetherserpent-backend.uttombarman55.workers.dev
   turnstileToken: test-token
   autoConnectOnStart: 0
+--- !u!114 &407
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 400}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c8000000000000000000000000000001, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+--- !u!114 &408
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 400}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c8000000000000000000000000000002, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+--- !u!114 &409
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 400}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c10000000000000000000000000000009, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
 --- !u!1 &500
 GameObject:
   m_ObjectHideFlags: 0
@@ -748,6 +800,8 @@ GameObject:
   - component: {fileID: 607}
   - component: {fileID: 608}
   - component: {fileID: 609}
+  - component: {fileID: 614}
+  - component: {fileID: 615}
   m_Layer: 5
   m_Name: Gameplay_Canvas
   m_TagString: Untagged
@@ -900,7 +954,31 @@ MonoBehaviour:
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: c7000000000000000000000000000005, type: 3}
   m_Name: 
-  m_EditorClassIdentifier:
+  m_EditorClassIdentifier: 
+--- !u!114 &614
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 600}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c6000000000000000000000000000006, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+--- !u!114 &615
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 600}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c6000000000000000000000000000007, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
 --- !u!1 &610
 GameObject:
   m_ObjectHideFlags: 0

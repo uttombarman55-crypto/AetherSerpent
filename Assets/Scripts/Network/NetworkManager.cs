@@ -20,7 +20,7 @@ namespace AetherSerpent.Network
         public static NetworkManager Instance { get; private set; }
 
         [Header("Cloudflare Backend Configuration")]
-        [SerializeField] private string backendHttpUrl = "http://127.0.0.1:8787";
+        [SerializeField] private string backendHttpUrl = "https://aetherserpent-backend.uttombarman55.workers.dev";
         [SerializeField] private string turnstileToken = "test-token"; // Validated by Cloudflare Turnstile
         [SerializeField] private bool autoConnectOnStart = false;
 
@@ -36,6 +36,8 @@ namespace AetherSerpent.Network
         public string CurrentRoomId => currentRoomId;
         public NetworkRole CurrentRole => currentRole;
         public string PlayerId => playerId;
+        public string Username => username;
+        public string AccessToken => accessToken;
         public bool IsConnected => webSocketClient != null && webSocketClient.State == WebSocketClient.ConnectionState.Connected;
         public int PingMs => webSocketClient != null ? webSocketClient.PingMs : 0;
         public WebSocketClient.ConnectionState ConnectionState => webSocketClient != null ? webSocketClient.State : WebSocketClient.ConnectionState.Disconnected;

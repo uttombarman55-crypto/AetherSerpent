@@ -79,3 +79,62 @@ export interface MatchmakingResponse {
   assignedRole: CoopRole;
   wsUrl: string;
 }
+
+// Leaderboard Types
+export interface LeaderboardEntry {
+  playerId: string;
+  username: string;
+  score: number;
+  length: number;
+  evolutionPath: number;
+  submittedAt: number;
+}
+
+export interface ScoreSubmissionPayload {
+  score: number;
+  length: number;
+  evolutionPath: number;
+}
+
+// Social & Friends Types
+export interface FriendInfo {
+  playerId: string;
+  username: string;
+  addedAt: number;
+  isOnline: boolean;
+}
+
+export interface PartyMemberInfo {
+  playerId: string;
+  username: string;
+  isLeader: boolean;
+  joinedAt: number;
+}
+
+export interface PartyInfo {
+  partyId: string;
+  leaderId: string;
+  leaderName: string;
+  members: PartyMemberInfo[];
+  createdAt: number;
+}
+
+// Cloud Save Types
+export interface CloudSaveData {
+  playerId: string;
+  saveVersion: number;
+  saveDataJson: string;
+  checksum: string;
+  updatedAt: number;
+}
+
+// System Status Types
+export interface VersionCheckResponse {
+  clientVersion: string;
+  minSupportedVersion: string;
+  latestVersion: string;
+  isUpdateRequired: boolean;
+  isMaintenanceActive: boolean;
+  maintenanceMessage?: string;
+}
+

@@ -144,3 +144,4 @@ namespace AetherSerpent.Network
         public int newScore;
     }
 }
+

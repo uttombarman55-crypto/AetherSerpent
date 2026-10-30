@@ -41,6 +41,34 @@ namespace AetherSerpent.Core
                 stmObj.AddComponent<SceneTransitionManager>();
             }
 
+            // 3. Load Save System Profile
+            AetherSerpent.Save.SaveSystem.LoadFromDisk();
+
+            // 4. Verify / Instantiate Network & Social Subsystems
+            if (AetherSerpent.Network.NetworkManager.Instance == null)
+            {
+                GameObject netObj = new GameObject("[NetworkManager]");
+                netObj.AddComponent<AetherSerpent.Network.NetworkManager>();
+            }
+
+            if (AetherSerpent.Social.LeaderboardManager.Instance == null)
+            {
+                GameObject lbObj = new GameObject("[LeaderboardManager]");
+                lbObj.AddComponent<AetherSerpent.Social.LeaderboardManager>();
+            }
+
+            if (AetherSerpent.Social.SocialManager.Instance == null)
+            {
+                GameObject socObj = new GameObject("[SocialManager]");
+                socObj.AddComponent<AetherSerpent.Social.SocialManager>();
+            }
+
+            if (AetherSerpent.Core.VersionCheckManager.Instance == null)
+            {
+                GameObject verObj = new GameObject("[VersionCheckManager]");
+                verObj.AddComponent<AetherSerpent.Core.VersionCheckManager>();
+            }
+
             yield return new WaitForSeconds(0.3f);
             UpdateStatus("Validating Universal Render Pipeline & Shaders...", 0.45f);
 
