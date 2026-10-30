@@ -88,3 +88,4 @@ D:\AetherSerpent\
 - Newly consumed prey adds metabolic tokens to `SerpentGrowth.cs`.
 - Vertebrae dynamically scale between 50 and 500+ segments without hitching via `SerpentSegmentPool.cs`.
 - Camera automatically pulls back smoothly as the serpent grows.
+

@@ -2,6 +2,7 @@ import { GameRoomDO } from './GameRoomDO';
 import { WorldZoneDO } from './WorldZoneDO';
 import { SocialHubDO } from './SocialHubDO';
 import { AuthService } from './auth';
+import { getDashboardHtml } from './dashboard';
 import { AuthResponse, MatchmakingResponse, CoopRole, VersionCheckResponse } from './types';
 
 export { GameRoomDO, WorldZoneDO, SocialHubDO };
@@ -65,8 +66,30 @@ export default {
     }
 
     try {
-      // 3. Health & Status Check
-      if (url.pathname === '/' || url.pathname === '/api/health') {
+      // 3. Health & Status Check / Celestial Edge Dashboard
+      if (url.pathname === '/') {
+        const acceptsHtml = request.headers.get('Accept')?.includes('text/html') || false;
+        if (acceptsHtml) {
+          return new Response(getDashboardHtml(), {
+            headers: {
+              'Content-Type': 'text/html; charset=utf-8',
+              'Access-Control-Allow-Origin': '*',
+            },
+          });
+        }
+
+        return Response.json({
+          status: 'online',
+          service: 'AetherSerpent_EternalCoil Backend',
+          environment: env.ENVIRONMENT || 'production',
+          version: '1.0.0',
+          timestamp: Date.now(),
+        }, {
+          headers: { 'Access-Control-Allow-Origin': '*' }
+        });
+      }
+
+      if (url.pathname === '/api/health') {
         return Response.json({
           status: 'online',
           service: 'AetherSerpent_EternalCoil Backend',

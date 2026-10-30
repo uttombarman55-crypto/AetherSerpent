@@ -80,3 +80,4 @@ A high-end, production-grade 3D mythical serpent game featuring realistic Verlet
 
 ## 📄 License
 MIT License. Developed for the AetherSerpent project.
+

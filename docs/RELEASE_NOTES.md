@@ -40,3 +40,4 @@
 - **Cinematic Photo Mode:** 6-DOF free camera with visual filters and high-res screenshot capture (`P` key).
 - **Atomic Save System:** File-based atomic replacement (`.tmp` -> primary save) with SHA-256 integrity checksums and cloud-save sync readiness.
 - **Settings & Pause Menu:** Audio sliders, graphics quality presets, and clean UI navigation.
+

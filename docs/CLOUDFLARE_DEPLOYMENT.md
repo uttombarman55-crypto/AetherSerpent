@@ -107,3 +107,4 @@ Current Version ID: 0fe221be-a0ba-4482-89ca-a9fb6d18b500
 - **Turnstile Verification:** Uses server-side validation against `https://challenges.cloudflare.com/turnstile/v0/siteverify`.
 - **JWT Cryptography:** Employs native Web Crypto API (`crypto.subtle`) with HMAC-SHA256.
 - **Client Security:** No private signing keys or database credentials are embedded inside the Unity client.
+

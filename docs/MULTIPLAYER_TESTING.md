@@ -53,3 +53,4 @@ You can test either:
    - The GameRoom Durable Object reattaches Client 1 and resumes synchronous 20Hz state broadcast.
 3. **Anti-Cheat Validation**:
    - Any client attempting to jump beyond 28 units/sec is automatically clamped by the server tick loop in `GameRoomDO.ts`.
+
