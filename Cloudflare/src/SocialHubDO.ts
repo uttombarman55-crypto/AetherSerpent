@@ -22,7 +22,11 @@ import {
   ChatChannel,
   ChatMessage,
   SendChatRequest,
-  ChatHistoryResponse
+  ChatHistoryResponse,
+  VoiceChannel,
+  VoiceUserState,
+  VoiceSignalPayload,
+  VoiceAudioPacket
 } from './types';
 
 interface Env {
@@ -154,6 +158,7 @@ function getWeekInfo(date: Date): { year: number; week: number } {
 
 export class SocialHubDO extends DurableObject {
   private chatSockets = new Map<WebSocket, { playerId: string; username: string; numericId: number; clanId?: string; squadId?: string }>();
+  private voiceSockets = new Map<WebSocket, VoiceUserState>();
   private lastGlobalChatTimes = new Map<string, number>();
   private lastChatTimes = new Map<string, number>();
   private lastMessageHashes = new Map<string, number>();
@@ -639,6 +644,24 @@ export class SocialHubDO extends DurableObject {
     }
   }
 
+  private broadcastVoice(sender: VoiceUserState, payload: unknown, excludeWs?: WebSocket): void {
+    const jsonStr = JSON.stringify(payload);
+    for (const [ws, peerState] of this.voiceSockets.entries()) {
+      if (ws === excludeWs) continue;
+      if (peerState.channel !== sender.channel) continue;
+
+      if (sender.channel === 'squad') {
+        if (peerState.squadId && peerState.squadId === sender.squadId) {
+          try { ws.send(jsonStr); } catch { this.voiceSockets.delete(ws); }
+        }
+      } else if (sender.channel === 'match') {
+        if (peerState.roomId && peerState.roomId === sender.roomId) {
+          try { ws.send(jsonStr); } catch { this.voiceSockets.delete(ws); }
+        }
+      }
+    }
+  }
+
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     try {
       const text = typeof message === 'string' ? message : new TextDecoder().decode(message);
@@ -649,6 +672,156 @@ export class SocialHubDO extends DurableObject {
         return;
       }
 
+      // Voice WebSocket handling
+      const vSession = this.voiceSockets.get(ws);
+      if (vSession) {
+        if (data.type === 'VOICE_PING') {
+          ws.send(JSON.stringify({ type: 'VOICE_PONG', timestamp: Date.now() }));
+          return;
+        }
+
+        if (data.type === 'VOICE_CHANNEL_SET') {
+          const oldChannel = vSession.channel;
+          const newChannel = (data.channel || 'off') as VoiceChannel;
+          vSession.channel = newChannel;
+          if (data.squadId) vSession.squadId = data.squadId;
+          if (data.roomId) vSession.roomId = data.roomId;
+
+          // Notify old channel peers of leave
+          if (oldChannel !== 'off') {
+            this.broadcastVoice({ ...vSession, channel: oldChannel }, {
+              type: 'VOICE_LEAVE',
+              playerId: vSession.playerId,
+              channel: oldChannel,
+              timestamp: Date.now()
+            }, ws);
+          }
+
+          // If joining new channel, collect current peers and send roster
+          const currentPeers: VoiceUserState[] = [];
+          if (newChannel !== 'off') {
+            for (const [otherWs, state] of this.voiceSockets.entries()) {
+              if (otherWs !== ws && state.channel === newChannel) {
+                if (newChannel === 'squad' && state.squadId === vSession.squadId) {
+                  currentPeers.push(state);
+                } else if (newChannel === 'match' && state.roomId === vSession.roomId) {
+                  currentPeers.push(state);
+                }
+              }
+            }
+
+            // Broadcast join to new peers
+            this.broadcastVoice(vSession, {
+              type: 'VOICE_JOIN',
+              userState: vSession,
+              timestamp: Date.now()
+            }, ws);
+          }
+
+          ws.send(JSON.stringify({
+            type: 'VOICE_ROSTER',
+            channel: newChannel,
+            peers: currentPeers,
+            timestamp: Date.now()
+          }));
+          return;
+        }
+
+        if (data.type === 'VOICE_STATE_UPDATE') {
+          if (typeof data.isSpeaking === 'boolean') vSession.isSpeaking = data.isSpeaking;
+          if (typeof data.isMuted === 'boolean') vSession.isMuted = data.isMuted;
+          if (typeof data.isDeafened === 'boolean') vSession.isDeafened = data.isDeafened;
+          if (typeof data.volumeLevel === 'number') vSession.volumeLevel = data.volumeLevel;
+
+          this.broadcastVoice(vSession, {
+            type: 'VOICE_STATE_SYNC',
+            userState: vSession,
+            timestamp: Date.now()
+          }, ws);
+          return;
+        }
+
+        // WebRTC SDP Offer / Answer / ICE Candidates Relay
+        if (data.type === 'VOICE_SIGNAL') {
+          const targetPeerId = data.targetPeerId as string;
+          const signalPayload = {
+            type: 'VOICE_SIGNAL',
+            senderId: vSession.playerId,
+            senderName: vSession.username,
+            senderNumericId: vSession.numericId,
+            signalType: data.signalType,
+            sdp: data.sdp,
+            candidate: data.candidate,
+            timestamp: Date.now()
+          };
+
+          if (targetPeerId) {
+            for (const [targetWs, pState] of this.voiceSockets.entries()) {
+              if (pState.playerId === targetPeerId) {
+                targetWs.send(JSON.stringify(signalPayload));
+                break;
+              }
+            }
+          } else {
+            this.broadcastVoice(vSession, signalPayload, ws);
+          }
+          return;
+        }
+
+        // Low-Latency Audio Stream Frame Relay
+        if (data.type === 'VOICE_FRAME') {
+          // If sender is muted, do not forward audio
+          if (vSession.isMuted) return;
+
+          const audioPayload = {
+            type: 'VOICE_FRAME',
+            senderId: vSession.playerId,
+            senderName: vSession.username,
+            channel: vSession.channel,
+            squadId: vSession.squadId,
+            roomId: vSession.roomId,
+            sequence: data.sequence || 0,
+            audioBase64: data.audioBase64 || '',
+            position: data.position,
+            timestamp: Date.now()
+          };
+
+          const audioStr = JSON.stringify(audioPayload);
+          for (const [otherWs, peerState] of this.voiceSockets.entries()) {
+            if (otherWs === ws) continue;
+            // Skip sending audio to deafened players
+            if (peerState.isDeafened) continue;
+            if (peerState.channel !== vSession.channel) continue;
+
+            if (vSession.channel === 'squad') {
+              if (peerState.squadId && peerState.squadId === vSession.squadId) {
+                try { otherWs.send(audioStr); } catch { this.voiceSockets.delete(otherWs); }
+              }
+            } else if (vSession.channel === 'match') {
+              if (peerState.roomId && peerState.roomId === vSession.roomId) {
+                try { otherWs.send(audioStr); } catch { this.voiceSockets.delete(otherWs); }
+              }
+            }
+          }
+          return;
+        }
+
+        if (data.type === 'VOICE_REPORT') {
+          const targetId = data.targetId as string;
+          const reason = (data.reason as string) || 'Voice Harassment';
+          const details = (data.details as string) || 'In-game voice abuse report';
+          if (targetId) {
+            this.ctx.storage.sql.exec(
+              `INSERT INTO player_reports (reporter_id, target_id, reason, details, created_at) VALUES (?, ?, ?, ?, ?)`,
+              vSession.playerId, targetId, reason, details, Date.now()
+            );
+            ws.send(JSON.stringify({ type: 'VOICE_REPORT_ACK', success: true, timestamp: Date.now() }));
+          }
+          return;
+        }
+      }
+
+      // Chat WebSocket handling
       if (data.type === 'CHAT_SEND') {
         const session = this.chatSockets.get(ws);
         if (!session) return;
@@ -664,6 +837,16 @@ export class SocialHubDO extends DurableObject {
 
   async webSocketClose(ws: WebSocket): Promise<void> {
     this.chatSockets.delete(ws);
+    const vSession = this.voiceSockets.get(ws);
+    if (vSession) {
+      this.voiceSockets.delete(ws);
+      this.broadcastVoice(vSession, {
+        type: 'VOICE_LEAVE',
+        playerId: vSession.playerId,
+        channel: vSession.channel,
+        timestamp: Date.now()
+      });
+    }
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -710,6 +893,139 @@ export class SocialHubDO extends DurableObject {
         }));
 
         return new Response(null, { status: 101, webSocket: client });
+      }
+
+      // WebSocket Upgrade for Real-Time Voice Chat & WebRTC Signaling
+      if (path === '/voice/ws') {
+        const upgradeHeader = request.headers.get('Upgrade');
+        if (!upgradeHeader || upgradeHeader.toLowerCase() !== 'websocket') {
+          return new Response('Expected Upgrade: websocket', { status: 426 });
+        }
+
+        const playerId = url.searchParams.get('playerId') || `usr_${crypto.randomUUID().substring(0, 8)}`;
+        const username = url.searchParams.get('username') || 'Drifter';
+        const numCursor = this.ctx.storage.sql.exec(`SELECT numeric_id FROM accounts WHERE id = ?`, playerId);
+        let numericId = 0;
+        for (const n of numCursor) { numericId = (n.numeric_id as number) || 0; break; }
+
+        let squadId = url.searchParams.get('squadId') || '';
+        if (!squadId) {
+          const smCursor = this.ctx.storage.sql.exec(`SELECT squad_id FROM squad_members WHERE player_id = ?`, playerId);
+          for (const sm of smCursor) { squadId = sm.squad_id as string; break; }
+        }
+
+        const roomId = url.searchParams.get('roomId') || '';
+        const initialChannel = (url.searchParams.get('channel') || (squadId ? 'squad' : (roomId ? 'match' : 'off'))) as VoiceChannel;
+
+        const pair = new WebSocketPair();
+        const [client, server] = Object.values(pair);
+
+        this.ctx.acceptWebSocket(server);
+
+        const initialUserState: VoiceUserState = {
+          playerId,
+          username,
+          numericId,
+          channel: initialChannel,
+          isSpeaking: false,
+          isMuted: false,
+          isDeafened: false,
+          volumeLevel: 0,
+          squadId: squadId || undefined,
+          roomId: roomId || undefined,
+        };
+
+        this.voiceSockets.set(server, initialUserState);
+
+        server.send(JSON.stringify({
+          type: 'VOICE_CONNECTED',
+          userState: initialUserState,
+          timestamp: Date.now()
+        }));
+
+        // Send current roster in same channel / squad
+        const currentPeers: VoiceUserState[] = [];
+        for (const [otherWs, state] of this.voiceSockets.entries()) {
+          if (otherWs !== server && state.channel === initialChannel) {
+            if (initialChannel === 'squad' && state.squadId === squadId) {
+              currentPeers.push(state);
+            } else if (initialChannel === 'match' && state.roomId === roomId) {
+              currentPeers.push(state);
+            }
+          }
+        }
+
+        server.send(JSON.stringify({
+          type: 'VOICE_ROSTER',
+          channel: initialChannel,
+          peers: currentPeers,
+          timestamp: Date.now()
+        }));
+
+        // Broadcast VOICE_JOIN to other peers in channel
+        this.broadcastVoice(initialUserState, {
+          type: 'VOICE_JOIN',
+          userState: initialUserState,
+          timestamp: Date.now()
+        }, server);
+
+        return new Response(null, { status: 101, webSocket: client });
+      }
+
+      // REST: Voice Status & Roster
+      if (path === '/voice/status' && request.method === 'GET') {
+        const playerId = url.searchParams.get('playerId') || '';
+        const channel = (url.searchParams.get('channel') || 'squad') as VoiceChannel;
+        let squadId = url.searchParams.get('squadId') || '';
+        if (!squadId && playerId) {
+          const smCursor = this.ctx.storage.sql.exec(`SELECT squad_id FROM squad_members WHERE player_id = ?`, playerId);
+          for (const sm of smCursor) { squadId = sm.squad_id as string; break; }
+        }
+
+        const peers: VoiceUserState[] = [];
+        for (const [_, state] of this.voiceSockets.entries()) {
+          if (state.channel === channel) {
+            if (channel === 'squad' && state.squadId === squadId) {
+              peers.push(state);
+            } else if (channel === 'match') {
+              peers.push(state);
+            }
+          }
+        }
+
+        return Response.json({
+          success: true,
+          channel,
+          squadId,
+          activeCount: peers.length,
+          speakingCount: peers.filter(p => p.isSpeaking).length,
+          peers
+        });
+      }
+
+      // REST: Report Voice Abuse
+      if (path === '/voice/report' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as {
+          targetId?: string;
+          reason?: string;
+          details?: string;
+        };
+        const reporterId = url.searchParams.get('playerId') || '';
+        const targetId = body.targetId || '';
+        const reason = body.reason || 'Voice Abuse';
+        const details = body.details || '';
+
+        if (!reporterId || !targetId) {
+          return Response.json({ success: false, error: 'Missing parameters' }, { status: 400 });
+        }
+
+        this.ctx.storage.sql.exec(
+          `INSERT INTO player_reports (reporter_id, target_id, reason, details, created_at)
+           VALUES (?, ?, ?, ?, ?)`,
+          reporterId, targetId, reason, details, Date.now()
+        );
+
+        return Response.json({ success: true, message: 'Voice abuse report submitted for review.' });
       }
 
       // REST: Send Chat Message

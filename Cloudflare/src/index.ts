@@ -488,11 +488,31 @@ export default {
         return socialStub.fetch(reqProxy);
       }
 
-      // 9. Social Hub (Leaderboards, Friends, Parties, Chat, Cloud Saves)
+      // 8.6. Real-Time Voice Chat & WebRTC Signaling WebSocket Upgrade
+      if (url.pathname === '/api/voice/ws') {
+        const token = url.searchParams.get('token') || request.headers.get('Authorization')?.replace('Bearer ', '');
+        let playerPayload: { sub: string; username: string } | null = null;
+        if (token) {
+          playerPayload = await AuthService.verifyJWT(token, env.JWT_SECRET);
+        }
+
+        const internalUrl = new URL(request.url);
+        internalUrl.pathname = '/voice/ws';
+        if (playerPayload) {
+          internalUrl.searchParams.set('playerId', playerPayload.sub);
+          internalUrl.searchParams.set('username', playerPayload.username);
+        }
+
+        const reqProxy = new Request(internalUrl.toString(), request);
+        return socialStub.fetch(reqProxy);
+      }
+
+      // 9. Social Hub (Leaderboards, Friends, Parties, Chat, Voice, Cloud Saves)
       if (
         url.pathname.startsWith('/api/leaderboard/') ||
         url.pathname.startsWith('/api/social/') ||
         url.pathname.startsWith('/api/chat/') ||
+        url.pathname.startsWith('/api/voice/') ||
         url.pathname.startsWith('/api/save/')
       ) {
         const authHeader = request.headers.get('Authorization');
@@ -506,7 +526,8 @@ export default {
         const isPublicRead = request.method === 'GET' && (
           url.pathname.startsWith('/api/leaderboard/') ||
           url.pathname === '/api/social/clan/list' ||
-          url.pathname.startsWith('/api/chat/history')
+          url.pathname.startsWith('/api/chat/history') ||
+          url.pathname.startsWith('/api/voice/status')
         );
         if (!isPublicRead && !playerPayload) {
           return Response.json({ error: 'Authorization required for this endpoint.' }, {
@@ -518,6 +539,7 @@ export default {
         let internalPath = url.pathname.replace('/api/leaderboard', '/leaderboard')
                                        .replace('/api/social', '')
                                        .replace('/api/chat', '/chat')
+                                       .replace('/api/voice', '/voice')
                                        .replace('/api/save', '/save');
         if (url.pathname === '/api/leaderboard/submit') {
           internalPath = '/submit-score';

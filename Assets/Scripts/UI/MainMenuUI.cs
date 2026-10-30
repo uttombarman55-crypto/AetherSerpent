@@ -66,6 +66,16 @@ namespace AetherSerpent.UI
                 GameObject cUiObj = new GameObject("[FreeFireChatUI]");
                 cUiObj.AddComponent<FreeFireChatUI>();
             }
+            if (AetherSerpent.Voice.VoiceEngine.Instance == null)
+            {
+                GameObject vObj = new GameObject("[VoiceEngine]");
+                vObj.AddComponent<AetherSerpent.Voice.VoiceEngine>();
+            }
+            if (FreeFireVoiceUI.Instance == null)
+            {
+                GameObject vUiObj = new GameObject("[FreeFireVoiceUI]");
+                vUiObj.AddComponent<FreeFireVoiceUI>();
+            }
         }
 
         public void OnPlayClicked()
@@ -160,6 +170,12 @@ namespace AetherSerpent.UI
                 if (GUILayout.Button("TEXT CHAT [C / Enter]", GUILayout.Height(30)))
                 {
                     FreeFireChatUI.Instance?.ToggleVisibility();
+                }
+
+                GUILayout.Space(6);
+                if (GUILayout.Button("VOICE COMMS [V]", GUILayout.Height(30)))
+                {
+                    FreeFireVoiceUI.Instance?.ToggleVisibility();
                 }
 
                 GUILayout.Space(6);

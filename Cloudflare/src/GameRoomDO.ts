@@ -242,6 +242,22 @@ export class GameRoomDO extends DurableObject {
           }
           break;
         }
+
+        case 'VOICE_SIGNAL':
+        case 'VOICE_STATE':
+        case 'VOICE_FRAME': {
+          // Match / Proximity voice relay to peers in room
+          for (const [otherWs] of this.players.entries()) {
+            if (otherWs !== ws) {
+              try {
+                otherWs.send(text);
+              } catch {
+                this.players.delete(otherWs);
+              }
+            }
+          }
+          break;
+        }
       }
     } catch {
       // Ignore malformed packets

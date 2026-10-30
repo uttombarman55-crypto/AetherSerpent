@@ -105,6 +105,18 @@ namespace AetherSerpent.Core
                 cUiObj.AddComponent<AetherSerpent.UI.FreeFireChatUI>();
             }
 
+            if (AetherSerpent.Voice.VoiceEngine.Instance == null)
+            {
+                GameObject vObj = new GameObject("[VoiceEngine]");
+                vObj.AddComponent<AetherSerpent.Voice.VoiceEngine>();
+            }
+
+            if (AetherSerpent.UI.FreeFireVoiceUI.Instance == null)
+            {
+                GameObject vUiObj = new GameObject("[FreeFireVoiceUI]");
+                vUiObj.AddComponent<AetherSerpent.UI.FreeFireVoiceUI>();
+            }
+
             yield return new WaitForSeconds(0.3f);
             UpdateStatus("Validating Universal Render Pipeline & Shaders...", 0.45f);
 

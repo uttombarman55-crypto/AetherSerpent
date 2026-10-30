@@ -384,3 +384,50 @@ export interface ChatHistoryResponse {
   error?: string;
 }
 
+// ==========================================
+// HIGH-QUALITY REAL-TIME VOICE CHAT SYSTEM
+// ==========================================
+export type VoiceChannel = 'squad' | 'match' | 'off';
+export type VoiceSignalType = 'offer' | 'answer' | 'candidate' | 'join' | 'leave' | 'state';
+
+export interface VoiceUserState {
+  playerId: string;
+  username: string;
+  numericId: number;
+  channel: VoiceChannel;
+  isSpeaking: boolean;
+  isMuted: boolean;
+  isDeafened: boolean;
+  volumeLevel: number; // 0.0 to 1.0 (RMS audio meter)
+  squadId?: string;
+  roomId?: string;
+}
+
+export interface VoiceSignalPayload {
+  type: VoiceSignalType;
+  senderId: string;
+  senderName?: string;
+  senderNumericId?: number;
+  targetPeerId?: string;
+  channel: VoiceChannel;
+  squadId?: string;
+  roomId?: string;
+  sdp?: string;
+  candidate?: any;
+  state?: Partial<VoiceUserState>;
+  timestamp: number;
+}
+
+export interface VoiceAudioPacket {
+  senderId: string;
+  senderName: string;
+  channel: VoiceChannel;
+  squadId?: string;
+  roomId?: string;
+  sequence: number;
+  timestamp: number;
+  audioBase64: string;
+  position?: Vector3Data; // 3D spatial position for proximity rolloff
+}
+
+
