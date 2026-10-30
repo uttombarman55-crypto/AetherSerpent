@@ -82,3 +82,4 @@ namespace AetherSerpent.Input
         public void OnDescendButtonUp() => InputReader.Instance?.SetVirtualAscend(0f);
     }
 }
+

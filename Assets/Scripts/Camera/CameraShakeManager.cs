@@ -85,3 +85,4 @@ namespace AetherSerpent.CameraSystem
         }
     }
 }
+

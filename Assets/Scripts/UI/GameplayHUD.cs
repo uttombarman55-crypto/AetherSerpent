@@ -10,6 +10,7 @@ namespace AetherSerpent.UI
     /// AAA Gameplay HUD displaying dynamic telemetry:
     /// - Speedometer & Boost Energy gauge
     /// - Living Serpent length counter & score
+    /// - Evolution Tier progression status
     /// - Real-time FPS Performance Metric
     /// - Comprehensive Controls guide overlay
     /// - In-game Pause menu
@@ -102,7 +103,9 @@ namespace AetherSerpent.UI
 
             if (serpentGrowth != null && lengthText != null)
             {
-                lengthText.text = $"LENGTH: {serpentGrowth.CurrentSegmentCount} SEGMENTS";
+                int count = serpentGrowth.CurrentSegmentCount;
+                string tier = (count < 90) ? "JUVENILE SERPENT" : (count < 160 ? "ELDER DRAKE" : "CELESTIAL LEVIATHAN");
+                lengthText.text = $"LENGTH: {count} SEGMENTS\n<size=18><color=#60E0FF>{tier}</color></size>";
             }
 
             if (scoreText != null && GameManager.Instance != null)

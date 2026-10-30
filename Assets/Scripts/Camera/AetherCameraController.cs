@@ -7,7 +7,8 @@ namespace AetherSerpent.CameraSystem
     /// <summary>
     /// AAA Dynamic Third-Person Camera System.
     /// Features:
-    /// - Dynamic distance & height adaptation based on serpent length & segment count
+    /// - Logarithmic Dynamic Framing scaling from 40 to 300+ segments seamlessly
+    /// - Center-of-Mass Focus Blending (frames the entire majestic serpent body)
     /// - Dynamic high-speed pullback & FOV widening during boost
     /// - Jitter-free spherical position and rotation damping
     /// - Integrated 6-DOF Perlin trauma camera shake
@@ -17,39 +18,41 @@ namespace AetherSerpent.CameraSystem
     {
         [Header("Target & Focus")]
         [SerializeField] private Transform target;
-        [SerializeField] private Vector3 targetOffset = new Vector3(0f, 1.2f, 0f);
+        [SerializeField] private Vector3 targetOffset = new Vector3(0f, 1.5f, 0f);
+        [Range(0f, 1f)]
+        [SerializeField] private float midpointFocusBias = 0.35f; // Blends focus between head and body center
 
         [Header("Distance Scaling (Length-Adaptive)")]
-        [SerializeField] private float baseDistance = 8.0f;
-        [SerializeField] private float distancePerSegment = 0.28f;
-        [SerializeField] private float maxDistance = 35.0f;
-        [SerializeField] private float boostDistancePullback = 2.5f;
+        [SerializeField] private float baseDistance = 11.0f;
+        [SerializeField] private float distancePowerScale = 1.35f;
+        [SerializeField] private float maxDistance = 120.0f;
+        [SerializeField] private float boostDistancePullback = 3.5f;
 
         [Header("Height & Elevation")]
-        [SerializeField] private float baseHeight = 3.5f;
-        [SerializeField] private float heightPerSegment = 0.12f;
+        [SerializeField] private float baseHeight = 4.2f;
+        [SerializeField] private float heightPowerScale = 0.55f;
 
         [Header("Orbit Angles")]
-        [SerializeField] private float currentPitch = 18f;
+        [SerializeField] private float currentPitch = 20f;
         [SerializeField] private float currentYaw = 0f;
         [SerializeField] private float minPitch = -25f;
-        [SerializeField] private float maxPitch = 70f;
+        [SerializeField] private float maxPitch = 75f;
         [SerializeField] private float orbitSensitivity = 2.0f;
 
         [Header("Smooth Damping (No-Jitter)")]
-        [SerializeField] private float followDamping = 8.0f;
-        [SerializeField] private float rotationDamping = 10.0f;
+        [SerializeField] private float followDamping = 7.0f;
+        [SerializeField] private float rotationDamping = 9.0f;
 
         [Header("FOV Dynamics")]
         [SerializeField] private Camera targetCamera;
         [SerializeField] private float baseFOV = 60f;
-        [SerializeField] private float boostFOV = 72f;
+        [SerializeField] private float boostFOV = 74f;
 
-        private Vector3 currentVelocity;
         private float currentDistance;
         private float targetDistance;
         private SerpentGrowth serpentGrowth;
         private SerpentController serpentController;
+        private SerpentPhysicsFollower serpentFollower;
 
         private void Awake()
         {
@@ -78,6 +81,7 @@ namespace AetherSerpent.CameraSystem
                     target = controller.transform;
                     serpentController = controller;
                     serpentGrowth = controller.GetComponent<SerpentGrowth>();
+                    serpentFollower = controller.GetComponent<SerpentPhysicsFollower>();
                 }
             }
         }
@@ -107,41 +111,48 @@ namespace AetherSerpent.CameraSystem
                 float zoom = InputReader.Instance.ZoomInput;
                 if (Mathf.Abs(zoom) > 0.01f)
                 {
-                    baseDistance = Mathf.Clamp(baseDistance - (zoom * 2.0f), 4f, 25f);
+                    baseDistance = Mathf.Clamp(baseDistance - (zoom * 2.5f), 6f, 40f);
                 }
             }
         }
 
         private void CalculateDynamicFraming()
         {
-            int segmentCount = (serpentGrowth != null) ? serpentGrowth.CurrentSegmentCount : 12;
+            int segmentCount = (serpentGrowth != null) ? serpentGrowth.CurrentSegmentCount : 50;
             bool isBoosting = (serpentController != null) && serpentController.IsBoosting;
 
-            // Dynamically scale distance and height based on total snake length
-            float lengthFactor = segmentCount * distancePerSegment;
+            // Logarithmic/exponential growth curve: gently expands for giant serpents without losing framing
+            float lengthFactor = Mathf.Pow(segmentCount, 0.75f) * distancePowerScale;
             float boostFactor = isBoosting ? boostDistancePullback : 0f;
 
             targetDistance = Mathf.Clamp(baseDistance + lengthFactor + boostFactor, baseDistance, maxDistance);
-            currentDistance = Mathf.Lerp(currentDistance, targetDistance, Time.deltaTime * 3.5f);
+            currentDistance = Mathf.Lerp(currentDistance, targetDistance, Time.deltaTime * 3.0f);
         }
 
         private void UpdateCameraTransform()
         {
-            Vector3 targetPivot = target.position + targetOffset;
+            // Compute blended focal point between head and serpent midpoint
+            Vector3 focalPoint = target.position + targetOffset;
+            if (serpentFollower != null && midpointFocusBias > 0.01f)
+            {
+                Vector3 spineMid = serpentFollower.GetSpineMidpoint() + targetOffset;
+                focalPoint = Vector3.Lerp(focalPoint, spineMid, midpointFocusBias);
+            }
 
-            // Compute ideal rotation
+            // Ideal orbit rotation
             Quaternion desiredRotation = Quaternion.Euler(currentPitch, currentYaw, 0f);
 
-            // Compute ideal position behind target pivot
-            float dynamicHeight = baseHeight + ((serpentGrowth != null ? serpentGrowth.CurrentSegmentCount : 12) * heightPerSegment);
+            // Compute ideal camera position behind focal point
+            int count = (serpentGrowth != null) ? serpentGrowth.CurrentSegmentCount : 50;
+            float dynamicHeight = baseHeight + (Mathf.Pow(count, 0.65f) * heightPowerScale);
             Vector3 offsetVector = desiredRotation * new Vector3(0f, dynamicHeight, -currentDistance);
-            Vector3 desiredPosition = targetPivot + offsetVector;
+            Vector3 desiredPosition = focalPoint + offsetVector;
 
             // Apply smooth jitter-free position damping
             transform.position = Vector3.Lerp(transform.position, desiredPosition, Time.deltaTime * followDamping);
 
             // Camera look rotation
-            Quaternion targetLookRotation = Quaternion.LookRotation(targetPivot - transform.position, Vector3.up);
+            Quaternion targetLookRotation = Quaternion.LookRotation(focalPoint - transform.position, Vector3.up);
             transform.rotation = Quaternion.Slerp(transform.rotation, targetLookRotation, Time.deltaTime * rotationDamping);
 
             // Apply Trauma Shake from CameraShakeManager
@@ -168,6 +179,7 @@ namespace AetherSerpent.CameraSystem
             {
                 serpentController = target.GetComponent<SerpentController>();
                 serpentGrowth = target.GetComponent<SerpentGrowth>();
+                serpentFollower = target.GetComponent<SerpentPhysicsFollower>();
             }
         }
     }

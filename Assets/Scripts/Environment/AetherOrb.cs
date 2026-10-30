@@ -8,19 +8,19 @@ namespace AetherSerpent.Environment
     /// <summary>
     /// Bioluminescent Aether Energy Orb collectible.
     /// Features gentle floating bobbing, pulsating emission,
-    /// collection detection, camera impulse feedback, and respawning.
+    /// collection detection, camera impulse feedback, and smooth respawning.
     /// </summary>
     [RequireComponent(typeof(SphereCollider))]
     public class AetherOrb : MonoBehaviour
     {
         [Header("Oscillation Settings")]
-        [SerializeField] private float bobAmplitude = 0.35f;
-        [SerializeField] private float bobFrequency = 2.0f;
-        [SerializeField] private float rotationSpeed = 45.0f;
+        [SerializeField] private float bobAmplitude = 0.4f;
+        [SerializeField] private float bobFrequency = 2.2f;
+        [SerializeField] private float rotationSpeed = 50.0f;
 
         [Header("Value")]
-        [SerializeField] private int scoreValue = 100;
-        [SerializeField] private int growthSegments = 1;
+        [SerializeField] private int scoreValue = 150;
+        [SerializeField] private int growthSegments = 2; // Adds 2 segments smoothly per orb
 
         private Vector3 initialPosition;
         private float seed;
@@ -30,7 +30,7 @@ namespace AetherSerpent.Environment
         {
             sphereCollider = GetComponent<SphereCollider>();
             sphereCollider.isTrigger = true;
-            sphereCollider.radius = 1.2f;
+            sphereCollider.radius = 1.35f;
 
             initialPosition = transform.position;
             seed = Random.value * 50f;
@@ -46,7 +46,7 @@ namespace AetherSerpent.Environment
                 GameObject inner = GameObject.CreatePrimitive(PrimitiveType.Sphere);
                 inner.name = "Orb_Core";
                 inner.transform.SetParent(transform, false);
-                inner.transform.localScale = Vector3.one * 0.7f;
+                inner.transform.localScale = Vector3.one * 0.75f;
                 DestroyImmediate(inner.GetComponent<Collider>());
 
                 Shader litShader = Shader.Find("Universal Render Pipeline/Lit");
@@ -57,7 +57,7 @@ namespace AetherSerpent.Environment
                 Color glowCol = new Color(0.2f, 0.9f, 1.0f);
                 mat.color = glowCol;
                 mat.EnableKeyword("_EMISSION");
-                mat.SetColor("_EmissionColor", glowCol * 4.0f);
+                mat.SetColor("_EmissionColor", glowCol * 4.5f);
 
                 inner.GetComponent<Renderer>().sharedMaterial = mat;
 
@@ -67,8 +67,8 @@ namespace AetherSerpent.Environment
                 Light pLight = lightObj.AddComponent<Light>();
                 pLight.type = LightType.Point;
                 pLight.color = glowCol;
-                pLight.intensity = 2.5f;
-                pLight.range = 8.0f;
+                pLight.intensity = 3.0f;
+                pLight.range = 9.0f;
             }
         }
 
@@ -81,7 +81,6 @@ namespace AetherSerpent.Environment
 
         private void OnTriggerEnter(Collider other)
         {
-            // Check if head of serpent touched orb
             var growth = other.GetComponentInParent<SerpentGrowth>();
             if (growth != null)
             {
@@ -100,13 +99,13 @@ namespace AetherSerpent.Environment
 
             if (CameraShakeManager.Instance != null)
             {
-                CameraShakeManager.Instance.AddTrauma(0.25f);
+                CameraShakeManager.Instance.AddTrauma(0.28f);
             }
 
-            // Respawn at a random coordinate in the arena
+            // Respawn at a random coordinate in the sanctuary arena
             Vector3 randomPos = new Vector3(
                 Random.Range(-45f, 45f),
-                Random.Range(2f, 18f),
+                Random.Range(2.5f, 18f),
                 Random.Range(-45f, 45f)
             );
 

@@ -206,3 +206,4 @@ namespace AetherSerpent.Input
         public void SetVirtualSprint(bool sprint) => virtualSprint = sprint;
     }
 }
+

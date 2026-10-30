@@ -54,3 +54,4 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: a7a9f7336d3c0bb47b4d306b98ec3be3, type: 3}
   m_Name: ScreenSpaceShadows
   m_EditorClassIdentifier: 
+
