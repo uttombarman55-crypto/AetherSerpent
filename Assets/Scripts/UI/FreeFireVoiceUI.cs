@@ -44,10 +44,12 @@ namespace AetherSerpent.UI
         private Vector2 settingsScrollPos;
 
         private static readonly string[] ReportReasons = {
-            "Voice Harassment / Toxicity",
-            "Loud Noise / Screaming / Mic Spam",
-            "Inappropriate Language",
-            "Music / Audio Bot Spam"
+            "Cheating / Speed Hack / Modding",
+            "Toxicity / Harassment",
+            "Voice Abuse / Screaming / Audio Spam",
+            "Inappropriate Name or Tag",
+            "Griefing / Match Sabotage",
+            "Other Conduct Violation"
         };
 
         private void Awake()
@@ -88,6 +90,11 @@ namespace AetherSerpent.UI
                 {
                     ToggleVisibility();
                 }
+                else if (kb.escapeKey.wasPressedThisFrame)
+                {
+                    if (isReportModalOpen) isReportModalOpen = false;
+                    else if (IsVisible) IsVisible = false;
+                }
             }
 #else
             if (!isVKeyForPtt && Input.GetKeyDown(KeyCode.V))
@@ -97,6 +104,11 @@ namespace AetherSerpent.UI
             else if (isVKeyForPtt && Input.GetKeyDown(KeyCode.B))
             {
                 ToggleVisibility();
+            }
+            else if (Input.GetKeyDown(KeyCode.Escape))
+            {
+                if (isReportModalOpen) isReportModalOpen = false;
+                else if (IsVisible) IsVisible = false;
             }
 #endif
         }

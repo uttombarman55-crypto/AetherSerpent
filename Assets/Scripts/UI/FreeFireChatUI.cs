@@ -119,6 +119,10 @@ namespace AetherSerpent.UI
                 {
                     ToggleVisibility();
                 }
+                else if (IsVisible && kb.escapeKey.wasPressedThisFrame)
+                {
+                    IsVisible = false;
+                }
             }
 #else
             if (UnityEngine.Input.GetKeyDown(KeyCode.Return) || UnityEngine.Input.GetKeyDown(KeyCode.KeypadEnter))
@@ -135,6 +139,10 @@ namespace AetherSerpent.UI
             else if (UnityEngine.Input.GetKeyDown(KeyCode.C) && !IsVisible)
             {
                 ToggleVisibility();
+            }
+            else if (IsVisible && UnityEngine.Input.GetKeyDown(KeyCode.Escape))
+            {
+                IsVisible = false;
             }
 #endif
         }

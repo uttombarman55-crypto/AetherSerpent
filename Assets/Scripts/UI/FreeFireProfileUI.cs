@@ -84,7 +84,12 @@ namespace AetherSerpent.UI
         };
         private static readonly string[] InviteOptions = { "Everyone", "Friends Only", "Nobody" };
         private static readonly string[] ReportReasons = {
-            "Cheating / Third-Party Tools", "Toxic / Harassment", "Inappropriate Name", "Impersonation", "Other Violation"
+            "Cheating / Speed Hack / Modding",
+            "Toxicity / Harassment",
+            "Voice Abuse / Audio Spam",
+            "Inappropriate Name or Tag",
+            "Griefing / Match Sabotage",
+            "Other Violation"
         };
 
         private void Awake()
@@ -120,14 +125,27 @@ namespace AetherSerpent.UI
 
 #if ENABLE_INPUT_SYSTEM
             var kb = UnityEngine.InputSystem.Keyboard.current;
-            if (kb != null && (kb.pKey.wasPressedThisFrame || kb.f2Key.wasPressedThisFrame))
+            if (kb != null)
             {
-                ToggleVisibility();
+                if (kb.pKey.wasPressedThisFrame || kb.f2Key.wasPressedThisFrame)
+                {
+                    ToggleVisibility();
+                }
+                else if (kb.escapeKey.wasPressedThisFrame)
+                {
+                    if (showReportModal) showReportModal = false;
+                    else if (IsVisible) IsVisible = false;
+                }
             }
 #else
             if (UnityEngine.Input.GetKeyDown(KeyCode.P) || UnityEngine.Input.GetKeyDown(KeyCode.F2))
             {
                 ToggleVisibility();
+            }
+            else if (UnityEngine.Input.GetKeyDown(KeyCode.Escape))
+            {
+                if (showReportModal) showReportModal = false;
+                else if (IsVisible) IsVisible = false;
             }
 #endif
         }

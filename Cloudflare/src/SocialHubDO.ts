@@ -47,11 +47,21 @@ const RESERVED_USERNAMES = new Set([
   'aether', 'developer', 'dev'
 ]);
 
+const BAD_WORDS = [
+  'fuck', 'shit', 'bitch', 'cunt', 'whore', 'slut', 'nigger', 'nigga',
+  'faggot', 'retard', 'asshole', 'dumbass', 'dickhead', 'bastard',
+  'motherfucker', 'kys', 'kill yourself'
+];
+
 const PROFANITY_PATTERNS = [
-  /\b(?:nigger|faggot|cunt|fuck|shit|bitch|whore|slut|retard)\b/i,
-  /n[i1l]gg/i,
-  /f[a4]g/i,
-  /c[u*]nt/i
+  /\b(?:nigger|nigga|faggot|cunt|fuck|shit|bitch|whore|slut|retard|asshole|dumbass|dickhead|bastard|motherfucker|kys)\b/i,
+  /n[i1l!|]gg/i,
+  /f[a4@]g/i,
+  /c[u*]nt/i,
+  /b[i1l!|]tch/i,
+  /sh[i1l!|]t/i,
+  /f[u*]ck/i,
+  /k[\s._\-*]*y[\s._\-*]*s/i
 ];
 
 export function validateUsername(name: string): { valid: boolean; error?: string } {
@@ -80,9 +90,35 @@ export function validateUsername(name: string): { valid: boolean; error?: string
 export function filterProfanity(text: string): string {
   if (!text) return '';
   let sanitized = text;
+
+  for (const word of BAD_WORDS) {
+    const chars = word.split('').map(c => {
+      if (c === ' ') return '\\s+';
+      if (c === 'a') return '[a@4]';
+      if (c === 'i') return '[i1!|l]';
+      if (c === 'o') return '[o0]';
+      if (c === 's') return '[s$5]';
+      if (c === 'e') return '[e3]';
+      if (c === 't') return '[t7+]';
+      if (c === 'b') return '[b8]';
+      if (c === 'u') return '[u*]';
+      return c;
+    });
+
+    try {
+      const regexStr = `(?:\\b|(?<=[^a-zA-Z0-9]))${chars.join('[\\s._\\-*~]*')}(?:\\b|(?=[^a-zA-Z0-9]))`;
+      const regex = new RegExp(regexStr, 'gi');
+      sanitized = sanitized.replace(regex, (match) => '*'.repeat(Math.max(3, match.length)));
+    } catch {
+      // Fallback simple replace
+      sanitized = sanitized.replace(new RegExp(`\\b${word}\\b`, 'gi'), '***');
+    }
+  }
+
   for (const pattern of PROFANITY_PATTERNS) {
     sanitized = sanitized.replace(pattern, '***');
   }
+
   return sanitized;
 }
 
@@ -230,6 +266,16 @@ export class SocialHubDO extends DurableObject {
         reason TEXT NOT NULL,
         details TEXT,
         created_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS player_sanctions (
+        player_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL DEFAULT 'active',
+        muted_until INTEGER NOT NULL DEFAULT 0,
+        banned_until INTEGER NOT NULL DEFAULT 0,
+        reason TEXT,
+        report_count INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS leaderboards (
@@ -514,6 +560,61 @@ export class SocialHubDO extends DurableObject {
     return notif;
   }
 
+  public evaluatePlayerSanctions(targetId: string): { isMuted: boolean; mutedUntil: number; isBanned: boolean; bannedUntil: number; count: number } {
+    const oneDayAgo = Date.now() - 86400000;
+    const repCountCursor = this.ctx.storage.sql.exec(
+      `SELECT COUNT(DISTINCT reporter_id) AS reporters FROM player_reports WHERE target_id = ? AND created_at > ?`,
+      targetId, oneDayAgo
+    );
+    let distinctReporters = 0;
+    for (const r of repCountCursor) { distinctReporters = r.reporters as number; break; }
+
+    const now = Date.now();
+    let mutedUntil = 0;
+    let bannedUntil = 0;
+    let status = 'active';
+    let reason = '';
+
+    if (distinctReporters >= 10) {
+      status = 'temp_banned';
+      bannedUntil = now + (24 * 3600 * 1000); // 24 hours suspension
+      mutedUntil = now + (24 * 3600 * 1000);
+      reason = 'Temporary suspension: 10+ player conduct reports received in 24 hours.';
+    } else if (distinctReporters >= 6) {
+      status = 'muted';
+      mutedUntil = now + (24 * 3600 * 1000); // 24 hours mute
+      reason = 'Automated 24h mute: 6+ toxicity/conduct reports received in 24 hours.';
+    } else if (distinctReporters >= 3) {
+      status = 'muted';
+      mutedUntil = now + (1 * 3600 * 1000); // 1 hour mute
+      reason = 'Automated 1h mute: 3+ player conduct reports received in 24 hours.';
+    }
+
+    if (status !== 'active') {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO player_sanctions (player_id, status, muted_until, banned_until, reason, report_count, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(player_id) DO UPDATE SET
+           status = CASE WHEN banned_until > ? THEN 'temp_banned' ELSE ? END,
+           muted_until = max(muted_until, ?),
+           banned_until = max(banned_until, ?),
+           reason = ?,
+           report_count = ?,
+           updated_at = ?`,
+        targetId, status, mutedUntil, bannedUntil, reason, distinctReporters, now,
+        now, status, mutedUntil, bannedUntil, reason, distinctReporters, now
+      );
+    }
+
+    return {
+      isMuted: mutedUntil > now,
+      mutedUntil,
+      isBanned: bannedUntil > now,
+      bannedUntil,
+      count: distinctReporters
+    };
+  }
+
   private async processChatMessage(
     sender: { playerId: string; username: string; numericId: number },
     req: SendChatRequest
@@ -524,6 +625,24 @@ export class SocialHubDO extends DurableObject {
     if (rawMsg.length > 250) rawMsg = rawMsg.substring(0, 250);
 
     const now = Date.now();
+
+    // Check Player Sanctions (Auto-Mute & Suspension)
+    const sanctionCursor = this.ctx.storage.sql.exec(
+      `SELECT status, muted_until, banned_until, reason FROM player_sanctions WHERE player_id = ?`,
+      sender.playerId
+    );
+    for (const s of sanctionCursor) {
+      const bannedUntil = (s.banned_until as number) || 0;
+      const mutedUntil = (s.muted_until as number) || 0;
+      if (bannedUntil > now) {
+        return { success: false, error: 'Your account is suspended due to conduct violations.' };
+      }
+      if (mutedUntil > now) {
+        const remainingMinutes = Math.ceil((mutedUntil - now) / 60000);
+        return { success: false, error: `You are temporarily muted (${remainingMinutes}m remaining) due to conduct reports.` };
+      }
+      break;
+    }
 
     // Filter profanity & parse emojis upfront
     let cleanMsg = filterProfanity(rawMsg);
@@ -851,8 +970,17 @@ export class SocialHubDO extends DurableObject {
 
         // Low-Latency Audio Stream Frame Relay
         if (data.type === 'VOICE_FRAME') {
-          // If sender is muted, do not forward audio
+          // If sender is muted locally or by automated sanctions, drop audio
           if (vSession.isMuted) return;
+
+          const sCursor = this.ctx.storage.sql.exec(
+            `SELECT muted_until FROM player_sanctions WHERE player_id = ?`,
+            vSession.playerId
+          );
+          for (const s of sCursor) {
+            if ((s.muted_until as number) > Date.now()) return;
+            break;
+          }
 
           const audioPayload = {
             type: 'VOICE_FRAME',
@@ -896,7 +1024,13 @@ export class SocialHubDO extends DurableObject {
               `INSERT INTO player_reports (reporter_id, target_id, reason, details, created_at) VALUES (?, ?, ?, ?, ?)`,
               vSession.playerId, targetId, reason, details, Date.now()
             );
-            ws.send(JSON.stringify({ type: 'VOICE_REPORT_ACK', success: true, timestamp: Date.now() }));
+            const sanctionRes = this.evaluatePlayerSanctions(targetId);
+            ws.send(JSON.stringify({
+              type: 'VOICE_REPORT_ACK',
+              success: true,
+              sanctioned: sanctionRes.isMuted || sanctionRes.isBanned,
+              timestamp: Date.now()
+            }));
           }
           return;
         }
@@ -1106,7 +1240,12 @@ export class SocialHubDO extends DurableObject {
           reporterId, targetId, reason, details, Date.now()
         );
 
-        return Response.json({ success: true, message: 'Voice abuse report submitted for review.' });
+        const sanctionRes = this.evaluatePlayerSanctions(targetId);
+        return Response.json({
+          success: true,
+          message: 'Voice abuse report submitted for review.',
+          sanctioned: sanctionRes.isMuted || sanctionRes.isBanned
+        });
       }
 
       // REST: Send Chat Message
@@ -1999,7 +2138,36 @@ export class SocialHubDO extends DurableObject {
           Date.now()
         );
 
-        return Response.json({ success: true, message: 'Report received. Our moderation guardians will review this case.' });
+        const sanctionRes = this.evaluatePlayerSanctions(targetId);
+        return Response.json({
+          success: true,
+          message: 'Report received. Our moderation guardians will review this case.',
+          sanctioned: sanctionRes.isMuted || sanctionRes.isBanned
+        });
+      }
+
+      // Check Player Sanctions Status
+      if ((path === '/sanctions' || path === '/social/sanctions') && request.method === 'GET') {
+        const playerId = url.searchParams.get('playerId') || '';
+        if (!playerId) return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+
+        const now = Date.now();
+        const sCursor = this.ctx.storage.sql.exec(`SELECT * FROM player_sanctions WHERE player_id = ?`, playerId);
+        let sRow: Record<string, unknown> | null = null;
+        for (const s of sCursor) { sRow = s; break; }
+
+        const mutedUntil = (sRow?.muted_until as number) || 0;
+        const bannedUntil = (sRow?.banned_until as number) || 0;
+
+        return Response.json({
+          success: true,
+          isMuted: mutedUntil > now,
+          mutedUntil,
+          isBanned: bannedUntil > now,
+          bannedUntil,
+          reason: (sRow?.reason as string) || null,
+          reportCount: (sRow?.report_count as number) || 0
+        });
       }
 
       // ---------------------------------------------------------
@@ -2233,6 +2401,20 @@ export class SocialHubDO extends DurableObject {
         const friendCheck = this.ctx.storage.sql.exec(`SELECT * FROM friends WHERE player_id = ? AND friend_id = ?`, senderId, receiver.id);
         for (const _ of friendCheck) {
           return Response.json({ success: false, error: 'Already friends with this player.' }, { status: 409 });
+        }
+
+        // Friend Request Cooldown (60s cooldown per target)
+        const pendingCursor = this.ctx.storage.sql.exec(
+          `SELECT created_at FROM friend_requests WHERE sender_id = ? AND receiver_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1`,
+          senderId, receiver.id
+        );
+        for (const pr of pendingCursor) {
+          const elapsed = (Date.now() - (pr.created_at as number)) / 1000;
+          if (elapsed < 60) {
+            const waitSec = Math.ceil(60 - elapsed);
+            return Response.json({ success: false, error: `Friend request already sent. Please wait ${waitSec}s before sending again.` }, { status: 429 });
+          }
+          break;
         }
 
         this.ctx.storage.sql.exec(
@@ -2503,6 +2685,17 @@ export class SocialHubDO extends DurableObject {
         const senderCursor = this.ctx.storage.sql.exec(`SELECT username FROM accounts WHERE id = ?`, playerId);
         let senderName = 'SquadLeader';
         for (const s of senderCursor) { senderName = s.username as string; break; }
+
+        // Squad Invite Cooldown Check (30 seconds per target player)
+        const recentInviteCursor = this.ctx.storage.sql.exec(
+          `SELECT created_at FROM squad_invites WHERE inviter_id = ? AND target_id = ? AND status = 'pending' AND created_at > ? ORDER BY created_at DESC LIMIT 1`,
+          playerId, targetId, Date.now() - 30000
+        );
+        for (const r of recentInviteCursor) {
+          const elapsedSec = Math.floor((Date.now() - (r.created_at as number)) / 1000);
+          const remaining = 30 - elapsedSec;
+          return Response.json({ success: false, error: `Squad invite cooldown active. Wait ${remaining}s before inviting this player again.` }, { status: 429 });
+        }
 
         this.ctx.storage.sql.exec(
           `INSERT INTO squad_invites (squad_id, squad_name, squad_tag, inviter_id, inviter_name, target_id, status, created_at)

@@ -284,6 +284,36 @@ namespace AetherSerpent.UI
 
         public void TogglePause()
         {
+            // If any social overlay is open, prioritize closing it first
+            bool closedAny = false;
+            if (FreeFireNotificationCenterUI.Instance != null && FreeFireNotificationCenterUI.Instance.IsVisible)
+            {
+                FreeFireNotificationCenterUI.Instance.ToggleVisibility();
+                closedAny = true;
+            }
+            if (FreeFireSocialUI.Instance != null && FreeFireSocialUI.Instance.IsVisible)
+            {
+                FreeFireSocialUI.Instance.ToggleVisibility();
+                closedAny = true;
+            }
+            if (FreeFireChatUI.Instance != null && FreeFireChatUI.Instance.IsVisible)
+            {
+                FreeFireChatUI.Instance.ToggleVisibility();
+                closedAny = true;
+            }
+            if (FreeFireVoiceUI.Instance != null && FreeFireVoiceUI.Instance.IsVisible)
+            {
+                FreeFireVoiceUI.Instance.ToggleVisibility();
+                closedAny = true;
+            }
+            if (FreeFireProfileUI.Instance != null && FreeFireProfileUI.Instance.IsVisible)
+            {
+                FreeFireProfileUI.Instance.ToggleVisibility();
+                closedAny = true;
+            }
+
+            if (closedAny) return;
+
             if (GameManager.Instance == null) return;
 
             if (GameManager.Instance.CurrentState == GameManager.GameState.Gameplay)

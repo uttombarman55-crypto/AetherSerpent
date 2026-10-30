@@ -84,6 +84,18 @@ namespace AetherSerpent.UI
                 {
                     ShowFeedback($"Squad Match Launched! Joining room {roomId}...");
                     IsVisible = false;
+
+                    if (UnityEngine.SceneManagement.SceneManager.GetActiveScene().name != "Gameplay")
+                    {
+                        if (SceneTransitionManager.Instance != null)
+                        {
+                            SceneTransitionManager.Instance.TransitionToScene("Gameplay");
+                        }
+                        else
+                        {
+                            UnityEngine.SceneManagement.SceneManager.LoadScene("Gameplay");
+                        }
+                    }
                 };
             }
         }
@@ -98,14 +110,25 @@ namespace AetherSerpent.UI
 
 #if ENABLE_INPUT_SYSTEM
             var kb = UnityEngine.InputSystem.Keyboard.current;
-            if (kb != null && (kb.lKey.wasPressedThisFrame || kb.f3Key.wasPressedThisFrame))
+            if (kb != null)
             {
-                ToggleVisibility();
+                if (kb.lKey.wasPressedThisFrame || kb.f3Key.wasPressedThisFrame)
+                {
+                    ToggleVisibility();
+                }
+                else if (IsVisible && kb.escapeKey.wasPressedThisFrame)
+                {
+                    IsVisible = false;
+                }
             }
 #else
             if (UnityEngine.Input.GetKeyDown(KeyCode.L) || UnityEngine.Input.GetKeyDown(KeyCode.F3))
             {
                 ToggleVisibility();
+            }
+            else if (IsVisible && UnityEngine.Input.GetKeyDown(KeyCode.Escape))
+            {
+                IsVisible = false;
             }
 #endif
         }

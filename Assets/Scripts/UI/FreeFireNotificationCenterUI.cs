@@ -50,14 +50,25 @@ namespace AetherSerpent.UI
         {
 #if ENABLE_INPUT_SYSTEM
             var kb = UnityEngine.InputSystem.Keyboard.current;
-            if (kb != null && kb.nKey.wasPressedThisFrame)
+            if (kb != null)
             {
-                ToggleVisibility();
+                if (kb.nKey.wasPressedThisFrame)
+                {
+                    ToggleVisibility();
+                }
+                else if (IsVisible && kb.escapeKey.wasPressedThisFrame)
+                {
+                    IsVisible = false;
+                }
             }
 #else
             if (Input.GetKeyDown(KeyCode.N))
             {
                 ToggleVisibility();
+            }
+            else if (IsVisible && Input.GetKeyDown(KeyCode.Escape))
+            {
+                IsVisible = false;
             }
 #endif
         }
@@ -568,3 +579,4 @@ namespace AetherSerpent.UI
         }
     }
 }
+

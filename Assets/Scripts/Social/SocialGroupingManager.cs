@@ -327,6 +327,26 @@ namespace AetherSerpent.Social
                     {
                         CurrentSquad = res.hasSquad ? res.squad : null;
                         OnSquadChanged?.Invoke(CurrentSquad);
+
+                        // Record fellow squad members in RecentPlayers
+                        if (CurrentSquad != null && CurrentSquad.members != null && NotificationManager.Instance != null)
+                        {
+                            string myId = GetPlayerId();
+                            foreach (var mem in CurrentSquad.members)
+                            {
+                                if (mem.playerId != myId)
+                                {
+                                    NotificationManager.Instance.RecordRecentPlayer(
+                                        mem.playerId,
+                                        mem.username,
+                                        mem.numericId,
+                                        mem.isLeader ? "Squad Leader" : "Squad Member",
+                                        "Squad Lobby"
+                                    );
+                                }
+                            }
+                        }
+
                         return CurrentSquad;
                     }
                 }

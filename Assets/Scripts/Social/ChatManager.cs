@@ -91,6 +91,27 @@ namespace AetherSerpent.Social
             { ":void:", "🕳️" }
         };
 
+        private static readonly string[] BadWords = {
+            "fuck", "shit", "bitch", "cunt", "whore", "slut", "nigger", "nigga",
+            "faggot", "retard", "asshole", "dumbass", "dickhead", "bastard", "motherfucker", "kys"
+        };
+
+        public static string FilterClientProfanity(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return "";
+            string sanitized = text;
+            foreach (var w in BadWords)
+            {
+                sanitized = System.Text.RegularExpressions.Regex.Replace(
+                    sanitized,
+                    $@"\b{w}\b",
+                    new string('*', w.Length),
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                );
+            }
+            return sanitized;
+        }
+
         private void Awake()
         {
             if (Instance != null && Instance != this)
@@ -259,8 +280,8 @@ namespace AetherSerpent.Social
             // Check if already in list (deduplication)
             if (item.id > 0 && AllMessages.Exists(m => m.id == item.id)) return;
 
-            // Emoji parsing
-            item.message = ReplaceEmojiShortcuts(item.message);
+            // Emoji parsing & profanity filter
+            item.message = FilterClientProfanity(ReplaceEmojiShortcuts(item.message));
 
             // Mention detection
             string myName = AccountManager.Instance != null ? AccountManager.Instance.Username : "";
@@ -332,7 +353,7 @@ namespace AetherSerpent.Social
                 return (false, "Sending messages too fast.");
             }
 
-            string cleanMsg = ReplaceEmojiShortcuts(message.Trim());
+            string cleanMsg = FilterClientProfanity(ReplaceEmojiShortcuts(message.Trim()));
             string channelStr = channel.ToString().ToLowerInvariant();
 
             SendChatPayload payload = new SendChatPayload
