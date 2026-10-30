@@ -80,6 +80,23 @@ namespace AetherSerpent.Serpent
         {
             bool wantsSprint = InputReader.Instance != null && InputReader.Instance.IsSprinting;
 
+            if (Core.SerpentVitals.Instance != null)
+            {
+                if (wantsSprint && Core.SerpentVitals.Instance.CurrentEnergy > 5f)
+                {
+                    IsBoosting = true;
+                    Core.SerpentVitals.Instance.ConsumeBoost(Time.deltaTime);
+                    currentBoostEnergy = Core.SerpentVitals.Instance.CurrentEnergy;
+                    lastBoostTime = Time.time;
+                }
+                else
+                {
+                    IsBoosting = false;
+                    currentBoostEnergy = Core.SerpentVitals.Instance.CurrentEnergy;
+                }
+                return;
+            }
+
             if (wantsSprint && currentBoostEnergy > 4f)
             {
                 IsBoosting = true;
@@ -142,6 +159,20 @@ namespace AetherSerpent.Serpent
 
             // Target speed with realistic acceleration/deceleration curves
             float targetSpeed = IsBoosting ? sprintSpeed : cruiseSpeed;
+
+            // Day-Night & Evolution synergy
+            if (SerpentEvolution.Instance != null && Environment.DayNightCycle.Instance != null)
+            {
+                if (SerpentEvolution.Instance.CurrentPath == EvolutionPath.Celestial && Environment.DayNightCycle.Instance.IsDaytime)
+                {
+                    targetSpeed *= 1.25f; // Celestial empowered by solar radiance
+                }
+                else if (SerpentEvolution.Instance.CurrentPath == EvolutionPath.Abyssal && !Environment.DayNightCycle.Instance.IsDaytime)
+                {
+                    targetSpeed *= 1.25f; // Abyssal empowered by deep night
+                }
+            }
+
             float rate = (targetSpeed > CurrentSpeed) ? acceleration : deceleration;
             CurrentSpeed = Mathf.MoveTowards(CurrentSpeed, targetSpeed, rate * Time.deltaTime);
 
