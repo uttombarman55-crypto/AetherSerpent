@@ -3,8 +3,18 @@ import {
   LeaderboardEntry,
   ScoreSubmissionPayload,
   FriendInfo,
+  FriendRequestInfo,
+  FriendDetailInfo,
   PartyInfo,
   PartyMemberInfo,
+  SquadInfo,
+  SquadMemberInfo,
+  SquadInviteInfo,
+  SquadChatMessage,
+  ClanInfo,
+  ClanMemberInfo,
+  ClanJoinRequestInfo,
+  ClanChatMessage,
   CloudSaveData,
   AccountProfile,
   PrivacySettings,
@@ -182,6 +192,119 @@ export class SocialHubDO extends DurableObject {
         friend_username TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         PRIMARY KEY (player_id, friend_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS friend_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sender_id TEXT NOT NULL,
+        sender_name TEXT NOT NULL,
+        sender_numeric_id INTEGER NOT NULL,
+        receiver_id TEXT NOT NULL,
+        receiver_name TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS player_presence (
+        player_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL DEFAULT 'online',
+        in_match_room TEXT,
+        last_seen_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS squads (
+        squad_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        tag TEXT NOT NULL,
+        leader_id TEXT NOT NULL,
+        leader_name TEXT NOT NULL,
+        max_members INTEGER DEFAULT 5,
+        is_open INTEGER DEFAULT 1,
+        squad_xp INTEGER DEFAULT 0,
+        squad_level INTEGER DEFAULT 1,
+        match_room_id TEXT,
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS squad_members (
+        squad_id TEXT NOT NULL,
+        player_id TEXT NOT NULL,
+        username TEXT NOT NULL,
+        numeric_id INTEGER NOT NULL,
+        role TEXT NOT NULL DEFAULT 'member',
+        is_ready INTEGER DEFAULT 0,
+        joined_at INTEGER NOT NULL,
+        PRIMARY KEY (squad_id, player_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS squad_invites (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        squad_id TEXT NOT NULL,
+        squad_name TEXT NOT NULL,
+        squad_tag TEXT NOT NULL,
+        inviter_id TEXT NOT NULL,
+        inviter_name TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        status TEXT DEFAULT 'pending',
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS squad_chat (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        squad_id TEXT NOT NULL,
+        sender_id TEXT NOT NULL,
+        sender_name TEXT NOT NULL,
+        message TEXT NOT NULL,
+        sent_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS clans (
+        clan_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        tag TEXT NOT NULL,
+        leader_id TEXT NOT NULL,
+        leader_name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        announcement TEXT NOT NULL,
+        badge_id INTEGER DEFAULT 1,
+        max_members INTEGER DEFAULT 50,
+        min_level INTEGER DEFAULT 1,
+        is_open INTEGER DEFAULT 1,
+        clan_xp INTEGER DEFAULT 0,
+        clan_level INTEGER DEFAULT 1,
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS clan_members (
+        clan_id TEXT NOT NULL,
+        player_id TEXT NOT NULL,
+        username TEXT NOT NULL,
+        numeric_id INTEGER NOT NULL,
+        rank TEXT NOT NULL DEFAULT 'member',
+        contribution INTEGER DEFAULT 0,
+        joined_at INTEGER NOT NULL,
+        PRIMARY KEY (clan_id, player_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS clan_join_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        clan_id TEXT NOT NULL,
+        player_id TEXT NOT NULL,
+        username TEXT NOT NULL,
+        numeric_id INTEGER NOT NULL,
+        level INTEGER DEFAULT 1,
+        status TEXT DEFAULT 'pending',
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS clan_chat (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        clan_id TEXT NOT NULL,
+        sender_id TEXT NOT NULL,
+        sender_name TEXT NOT NULL,
+        sender_rank TEXT NOT NULL,
+        message TEXT NOT NULL,
+        sent_at INTEGER NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS parties (
@@ -972,30 +1095,243 @@ export class SocialHubDO extends DurableObject {
       }
 
       // ---------------------------------------------------------
-      // 4. FRIENDS & PARTIES ENDPOINTS
+      // 4. FRIENDS SYSTEM (REQUESTS, PRESENCE & LAST LOGIN)
       // ---------------------------------------------------------
+
+      // Presence Update
+      if (path === '/presence/update' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as { status?: string; matchRoomId?: string };
+        const playerId = (body as any).playerId || url.searchParams.get('playerId') || '';
+        const status = body.status || 'online';
+        const matchRoomId = body.matchRoomId || null;
+        if (!playerId) return Response.json({ success: false, error: 'Missing playerId' }, { status: 400 });
+
+        this.ctx.storage.sql.exec(
+          `INSERT OR REPLACE INTO player_presence (player_id, status, in_match_room, last_seen_at)
+           VALUES (?, ?, ?, ?)`,
+          playerId,
+          status,
+          matchRoomId,
+          Date.now()
+        );
+
+        return Response.json({ success: true, status });
+      }
+
+      // Friends List with Online / In-Match / Offline & Last Login
       if (path === '/friends/list' && request.method === 'GET') {
         const playerId = url.searchParams.get('playerId');
         if (!playerId) return Response.json({ success: false, error: 'Missing playerId' }, { status: 400 });
 
         const cursor = this.ctx.storage.sql.exec(
-          `SELECT friend_id, friend_username, created_at FROM friends WHERE player_id = ?`,
+          `SELECT f.friend_id, f.friend_username, f.created_at,
+                  a.numeric_id, a.last_login_at,
+                  p.status AS presence_status, p.in_match_room, p.last_seen_at,
+                  sq.squad_id, sq.tag AS squad_tag,
+                  cl.clan_id, cl.tag AS clan_tag
+           FROM friends f
+           LEFT JOIN accounts a ON a.id = f.friend_id
+           LEFT JOIN player_presence p ON p.player_id = f.friend_id
+           LEFT JOIN squad_members sm ON sm.player_id = f.friend_id
+           LEFT JOIN squads sq ON sq.squad_id = sm.squad_id
+           LEFT JOIN clan_members cm ON cm.player_id = f.friend_id
+           LEFT JOIN clans cl ON cl.clan_id = cm.clan_id
+           WHERE f.player_id = ?`,
           playerId
         );
 
-        const friends: FriendInfo[] = [];
+        const now = Date.now();
+        const friends: FriendDetailInfo[] = [];
         for (const row of cursor) {
+          const lastSeen = (row.last_seen_at as number) || 0;
+          const presenceStatus = (row.presence_status as string) || 'offline';
+          const isRecentlyActive = (now - lastSeen) < 120000; // within 2 minutes
+
+          let calculatedStatus: 'online' | 'in_match' | 'offline' = 'offline';
+          if (isRecentlyActive && presenceStatus === 'in_match') {
+            calculatedStatus = 'in_match';
+          } else if (isRecentlyActive && presenceStatus !== 'offline') {
+            calculatedStatus = 'online';
+          }
+
           friends.push({
             playerId: row.friend_id as string,
-            username: row.friend_username as string,
+            username: (row.friend_username as string) || 'Drifter',
+            numericId: (row.numeric_id as number) || 0,
+            isOnline: calculatedStatus !== 'offline',
+            status: calculatedStatus,
+            lastLoginAt: (row.last_login_at as number) || (row.created_at as number),
             addedAt: row.created_at as number,
-            isOnline: true
+            currentSquadId: (row.squad_id as string) || undefined,
+            squadTag: (row.squad_tag as string) || undefined,
+            clanTag: (row.clan_tag as string) || undefined,
           });
         }
 
-        return Response.json({ success: true, friends });
+        return Response.json({ success: true, count: friends.length, friends });
       }
 
+      // Send Friend Request
+      if (path === '/friends/request' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as {
+          playerId?: string;
+          targetPlayerId?: string;
+          targetNumericId?: number;
+          targetUsername?: string;
+        };
+        const senderId = body.playerId || url.searchParams.get('playerId') || '';
+        const targetId = body.targetPlayerId || '';
+        const targetNum = body.targetNumericId || 0;
+        const targetUser = body.targetUsername || '';
+
+        if (!senderId) return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+
+        // Find receiver account
+        let targetCursor;
+        if (targetId) {
+          targetCursor = this.ctx.storage.sql.exec(`SELECT * FROM accounts WHERE id = ?`, targetId);
+        } else if (targetNum > 0) {
+          targetCursor = this.ctx.storage.sql.exec(`SELECT * FROM accounts WHERE numeric_id = ?`, targetNum);
+        } else if (targetUser) {
+          targetCursor = this.ctx.storage.sql.exec(`SELECT * FROM accounts WHERE username = ? COLLATE NOCASE`, targetUser);
+        } else {
+          return Response.json({ success: false, error: 'Target player required' }, { status: 400 });
+        }
+
+        let receiver: Record<string, unknown> | null = null;
+        for (const r of targetCursor) { receiver = r; break; }
+        if (!receiver) return Response.json({ success: false, error: 'Target player not found' }, { status: 404 });
+        if (receiver.id === senderId) return Response.json({ success: false, error: 'Cannot add yourself as friend' }, { status: 400 });
+
+        // Check privacy & blocklist
+        const blockCursor = this.ctx.storage.sql.exec(`SELECT * FROM blocked_players WHERE player_id = ? AND blocked_id = ?`, receiver.id, senderId);
+        for (const _ of blockCursor) {
+          return Response.json({ success: false, error: 'Cannot send friend request to this player.' }, { status: 403 });
+        }
+
+        const privCursor = this.ctx.storage.sql.exec(`SELECT allow_invites FROM privacy_settings WHERE player_id = ?`, receiver.id);
+        for (const p of privCursor) {
+          if ((p.allow_invites as number) === 2) { // Nobody
+            return Response.json({ success: false, error: 'Player does not accept friend requests.' }, { status: 403 });
+          }
+        }
+
+        // Get sender details
+        const senderCursor = this.ctx.storage.sql.exec(`SELECT username, numeric_id FROM accounts WHERE id = ?`, senderId);
+        let senderAcc: Record<string, unknown> | null = null;
+        for (const s of senderCursor) { senderAcc = s; break; }
+        const senderName = (senderAcc?.username as string) || url.searchParams.get('username') || 'Drifter';
+        const senderNumericId = (senderAcc?.numeric_id as number) || 0;
+
+        // Check already friends
+        const friendCheck = this.ctx.storage.sql.exec(`SELECT * FROM friends WHERE player_id = ? AND friend_id = ?`, senderId, receiver.id);
+        for (const _ of friendCheck) {
+          return Response.json({ success: false, error: 'Already friends with this player.' }, { status: 409 });
+        }
+
+        this.ctx.storage.sql.exec(
+          `INSERT INTO friend_requests (sender_id, sender_name, sender_numeric_id, receiver_id, receiver_name, status, created_at)
+           VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
+          senderId,
+          senderName,
+          senderNumericId,
+          receiver.id as string,
+          receiver.username as string,
+          Date.now()
+        );
+
+        return Response.json({ success: true, message: `Friend request sent to ${receiver.username}.` });
+      }
+
+      // Incoming & Outgoing Friend Requests
+      if (path === '/friends/requests' && request.method === 'GET') {
+        const playerId = url.searchParams.get('playerId');
+        if (!playerId) return Response.json({ success: false, error: 'Missing playerId' }, { status: 400 });
+
+        const incomingCursor = this.ctx.storage.sql.exec(
+          `SELECT id, sender_id, sender_name, sender_numeric_id, receiver_id, receiver_name, status, created_at
+           FROM friend_requests
+           WHERE receiver_id = ? AND status = 'pending'
+           ORDER BY created_at DESC`,
+          playerId
+        );
+
+        const incoming: FriendRequestInfo[] = [];
+        for (const row of incomingCursor) {
+          incoming.push({
+            id: row.id as number,
+            senderId: row.sender_id as string,
+            senderName: row.sender_name as string,
+            senderNumericId: row.sender_numeric_id as number,
+            receiverId: row.receiver_id as string,
+            receiverName: row.receiver_name as string,
+            status: row.status as 'pending',
+            createdAt: row.created_at as number,
+          });
+        }
+
+        return Response.json({ success: true, incoming });
+      }
+
+      // Respond to Friend Request (Accept / Reject)
+      if (path === '/friends/respond' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as {
+          playerId?: string;
+          requestId?: number;
+          action?: 'accept' | 'reject';
+        };
+        const playerId = body.playerId || url.searchParams.get('playerId') || '';
+        const requestId = body.requestId;
+        const action = body.action || 'accept';
+
+        if (!playerId || !requestId) return Response.json({ success: false, error: 'Invalid parameters' }, { status: 400 });
+
+        const reqCursor = this.ctx.storage.sql.exec(
+          `SELECT * FROM friend_requests WHERE id = ? AND receiver_id = ? AND status = 'pending'`,
+          requestId,
+          playerId
+        );
+        let reqRow: Record<string, unknown> | null = null;
+        for (const r of reqCursor) { reqRow = r; break; }
+        if (!reqRow) return Response.json({ success: false, error: 'Friend request not found or resolved' }, { status: 404 });
+
+        if (action === 'accept') {
+          const now = Date.now();
+          this.ctx.storage.sql.exec(
+            `INSERT OR REPLACE INTO friends (player_id, friend_id, friend_username, created_at) VALUES (?, ?, ?, ?)`,
+            reqRow.receiver_id as string,
+            reqRow.sender_id as string,
+            reqRow.sender_name as string,
+            now
+          );
+          this.ctx.storage.sql.exec(
+            `INSERT OR REPLACE INTO friends (player_id, friend_id, friend_username, created_at) VALUES (?, ?, ?, ?)`,
+            reqRow.sender_id as string,
+            reqRow.receiver_id as string,
+            reqRow.receiver_name as string,
+            now
+          );
+          this.ctx.storage.sql.exec(`UPDATE friend_requests SET status = 'accepted' WHERE id = ?`, requestId);
+          return Response.json({ success: true, message: 'Friend request accepted.' });
+        } else {
+          this.ctx.storage.sql.exec(`UPDATE friend_requests SET status = 'rejected' WHERE id = ?`, requestId);
+          return Response.json({ success: true, message: 'Friend request rejected.' });
+        }
+      }
+
+      // Remove Friend
+      if (path === '/friends/remove' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as { playerId?: string; friendId?: string };
+        const playerId = body.playerId || url.searchParams.get('playerId') || '';
+        const friendId = body.friendId || '';
+        if (!playerId || !friendId) return Response.json({ success: false, error: 'Invalid parameters' }, { status: 400 });
+
+        this.ctx.storage.sql.exec(`DELETE FROM friends WHERE player_id = ? AND friend_id = ?`, playerId, friendId);
+        this.ctx.storage.sql.exec(`DELETE FROM friends WHERE player_id = ? AND friend_id = ?`, friendId, playerId);
+        return Response.json({ success: true, message: 'Friend removed.' });
+      }
+
+      // Legacy Add Friend backward compatibility
       if (path === '/friends/add' && request.method === 'POST') {
         const body = (await request.json().catch(() => ({}))) as { playerId?: string; friendId?: string; friendUsername?: string };
         const playerId = body.playerId || url.searchParams.get('playerId') || '';
@@ -1004,127 +1340,945 @@ export class SocialHubDO extends DurableObject {
         if (!playerId || !friendId) return Response.json({ success: false, error: 'Invalid parameters' }, { status: 400 });
 
         this.ctx.storage.sql.exec(
-          `INSERT OR REPLACE INTO friends (player_id, friend_id, friend_username, created_at)
-           VALUES (?, ?, ?, ?)`,
-          playerId,
-          friendId,
-          friendUsername,
-          Date.now()
+          `INSERT OR REPLACE INTO friends (player_id, friend_id, friend_username, created_at) VALUES (?, ?, ?, ?)`,
+          playerId, friendId, friendUsername, Date.now()
         );
-
         return Response.json({ success: true });
       }
 
-      if (path === '/friends/remove' && request.method === 'POST') {
-        const body = (await request.json().catch(() => ({}))) as { playerId?: string; friendId?: string };
+      // ---------------------------------------------------------
+      // 5. FREE FIRE SQUAD SYSTEM (4-5 PLAYERS LOBBY & CHAT)
+      // ---------------------------------------------------------
+
+      // Create Squad
+      if (path === '/squad/create' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as {
+          playerId?: string;
+          username?: string;
+          name?: string;
+          tag?: string;
+        };
         const playerId = body.playerId || url.searchParams.get('playerId') || '';
-        const friendId = body.friendId || '';
-        if (!playerId || !friendId) return Response.json({ success: false, error: 'Invalid parameters' }, { status: 400 });
+        const username = body.username || url.searchParams.get('username') || 'AetherLeader';
+        const name = filterProfanity((body.name || `${username}'s Squad`).substring(0, 24));
+        const tag = (body.tag || 'AES').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').substring(0, 5);
+
+        if (!playerId) return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+
+        // Leave existing squad
+        this.ctx.storage.sql.exec(`DELETE FROM squad_members WHERE player_id = ?`, playerId);
+
+        const squadId = `SQD_${crypto.randomUUID().substring(0, 6).toUpperCase()}`;
+        const now = Date.now();
+
+        // Fetch sender numeric ID
+        const accCursor = this.ctx.storage.sql.exec(`SELECT numeric_id FROM accounts WHERE id = ?`, playerId);
+        let numericId = 0;
+        for (const a of accCursor) { numericId = (a.numeric_id as number) || 0; break; }
 
         this.ctx.storage.sql.exec(
-          `DELETE FROM friends WHERE player_id = ? AND friend_id = ?`,
-          playerId,
-          friendId
+          `INSERT INTO squads (squad_id, name, tag, leader_id, leader_name, max_members, is_open, squad_xp, squad_level, created_at)
+           VALUES (?, ?, ?, ?, ?, 5, 1, 0, 1, ?)`,
+          squadId, name, tag, playerId, username, now
         );
 
-        return Response.json({ success: true });
-      }
-
-      if (path === '/party/create' && request.method === 'POST') {
-        const body = (await request.json().catch(() => ({}))) as { playerId?: string; username?: string };
-        const playerId = body.playerId || url.searchParams.get('playerId') || '';
-        const username = body.username || url.searchParams.get('username') || 'AetherDrifter';
-        const partyId = `PTY_${crypto.randomUUID().substring(0, 6).toUpperCase()}`;
-
         this.ctx.storage.sql.exec(
-          `INSERT INTO parties (party_id, leader_id, leader_name, created_at) VALUES (?, ?, ?, ?)`,
-          partyId,
-          playerId,
-          username,
-          Date.now()
-        );
-
-        this.ctx.storage.sql.exec(
-          `INSERT INTO party_members (party_id, player_id, username, is_leader, joined_at) VALUES (?, ?, ?, 1, ?)`,
-          partyId,
-          playerId,
-          username,
-          Date.now()
+          `INSERT INTO squad_members (squad_id, player_id, username, numeric_id, role, is_ready, joined_at)
+           VALUES (?, ?, ?, ?, 'leader', 1, ?)`,
+          squadId, playerId, username, numericId, now
         );
 
         return Response.json({
           success: true,
-          party: {
-            partyId,
+          squad: {
+            squadId,
+            name,
+            tag,
             leaderId: playerId,
             leaderName: username,
-            members: [{ playerId, username, isLeader: true, joinedAt: Date.now() }],
-            createdAt: Date.now()
+            maxMembers: 5,
+            isOpen: true,
+            squadXp: 0,
+            squadLevel: 1,
+            members: [{
+              playerId,
+              username,
+              numericId,
+              role: 'leader',
+              isReady: true,
+              joinedAt: now
+            }],
+            createdAt: now
           }
         });
       }
 
-      if (path === '/party/join' && request.method === 'POST') {
-        const body = (await request.json().catch(() => ({}))) as { partyId?: string; playerId?: string; username?: string };
-        const partyId = body.partyId || '';
-        const playerId = body.playerId || url.searchParams.get('playerId') || '';
-        const username = body.username || url.searchParams.get('username') || 'AetherDrifter';
+      // Get My Current Squad
+      if (path === '/squad/my' && request.method === 'GET') {
+        const playerId = url.searchParams.get('playerId');
+        if (!playerId) return Response.json({ success: false, error: 'Missing playerId' }, { status: 400 });
 
-        const partyCursor = this.ctx.storage.sql.exec(`SELECT * FROM parties WHERE party_id = ?`, partyId);
-        let partyRow: Record<string, unknown> | null = null;
-        for (const row of partyCursor) {
-          partyRow = row;
-          break;
+        const memCursor = this.ctx.storage.sql.exec(`SELECT squad_id FROM squad_members WHERE player_id = ?`, playerId);
+        let currentSquadId: string | null = null;
+        for (const m of memCursor) { currentSquadId = m.squad_id as string; break; }
+
+        if (!currentSquadId) {
+          return Response.json({ success: true, hasSquad: false, squad: null });
         }
 
-        if (!partyRow) {
-          return Response.json({ success: false, error: 'Party code not found' }, { status: 404 });
-        }
+        const squadCursor = this.ctx.storage.sql.exec(`SELECT * FROM squads WHERE squad_id = ?`, currentSquadId);
+        let sRow: Record<string, unknown> | null = null;
+        for (const s of squadCursor) { sRow = s; break; }
+        if (!sRow) return Response.json({ success: true, hasSquad: false, squad: null });
 
-        this.ctx.storage.sql.exec(
-          `INSERT OR REPLACE INTO party_members (party_id, player_id, username, is_leader, joined_at) VALUES (?, ?, ?, 0, ?)`,
-          partyId,
-          playerId,
-          username,
-          Date.now()
+        const membersCursor = this.ctx.storage.sql.exec(
+          `SELECT player_id, username, numeric_id, role, is_ready, joined_at FROM squad_members WHERE squad_id = ? ORDER BY role DESC, joined_at ASC`,
+          currentSquadId
         );
-
-        return Response.json({ success: true, partyId });
-      }
-
-      if (path === '/party/info' && request.method === 'GET') {
-        const partyId = url.searchParams.get('partyId');
-        if (!partyId) return Response.json({ success: false, error: 'Missing partyId' }, { status: 400 });
-
-        const partyCursor = this.ctx.storage.sql.exec(`SELECT * FROM parties WHERE party_id = ?`, partyId);
-        let partyRow: Record<string, unknown> | null = null;
-        for (const row of partyCursor) {
-          partyRow = row;
-          break;
-        }
-
-        if (!partyRow) return Response.json({ success: false, error: 'Party not found' }, { status: 404 });
-
-        const membersCursor = this.ctx.storage.sql.exec(`SELECT * FROM party_members WHERE party_id = ?`, partyId);
-        const members: PartyMemberInfo[] = [];
+        const members: SquadMemberInfo[] = [];
         for (const row of membersCursor) {
           members.push({
             playerId: row.player_id as string,
             username: row.username as string,
-            isLeader: (row.is_leader as number) === 1,
+            numericId: row.numeric_id as number,
+            role: row.role as 'leader' | 'member',
+            isReady: (row.is_ready as number) === 1,
             joinedAt: row.joined_at as number,
           });
         }
 
-        const party: PartyInfo = {
-          partyId,
-          leaderId: partyRow.leader_id as string,
-          leaderName: partyRow.leader_name as string,
+        const squad: SquadInfo = {
+          squadId: sRow.squad_id as string,
+          name: sRow.name as string,
+          tag: sRow.tag as string,
+          leaderId: sRow.leader_id as string,
+          leaderName: sRow.leader_name as string,
+          maxMembers: (sRow.max_members as number) || 5,
+          isOpen: (sRow.is_open as number) === 1,
+          squadXp: (sRow.squad_xp as number) || 0,
+          squadLevel: (sRow.squad_level as number) || 1,
+          matchRoomId: (sRow.match_room_id as string) || undefined,
           members,
-          createdAt: partyRow.created_at as number,
+          createdAt: sRow.created_at as number,
         };
 
-        return Response.json({ success: true, party });
+        return Response.json({ success: true, hasSquad: true, squad });
+      }
+
+      // Quick Invite to Squad (from Friends list or ID)
+      if (path === '/squad/invite' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as {
+          playerId?: string;
+          targetPlayerId?: string;
+        };
+        const playerId = body.playerId || url.searchParams.get('playerId') || '';
+        const targetId = body.targetPlayerId || '';
+
+        if (!playerId || !targetId) return Response.json({ success: false, error: 'Missing parameters' }, { status: 400 });
+
+        // Find current squad
+        const memCursor = this.ctx.storage.sql.exec(`SELECT squad_id FROM squad_members WHERE player_id = ?`, playerId);
+        let squadId: string | null = null;
+        for (const m of memCursor) { squadId = m.squad_id as string; break; }
+        if (!squadId) return Response.json({ success: false, error: 'You are not in a squad' }, { status: 400 });
+
+        const squadCursor = this.ctx.storage.sql.exec(`SELECT name, tag FROM squads WHERE squad_id = ?`, squadId);
+        let sRow: Record<string, unknown> | null = null;
+        for (const s of squadCursor) { sRow = s; break; }
+
+        const senderCursor = this.ctx.storage.sql.exec(`SELECT username FROM accounts WHERE id = ?`, playerId);
+        let senderName = 'SquadLeader';
+        for (const s of senderCursor) { senderName = s.username as string; break; }
+
+        this.ctx.storage.sql.exec(
+          `INSERT INTO squad_invites (squad_id, squad_name, squad_tag, inviter_id, inviter_name, target_id, status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
+          squadId,
+          (sRow?.name as string) || 'Squad',
+          (sRow?.tag as string) || 'AES',
+          playerId,
+          senderName,
+          targetId,
+          Date.now()
+        );
+
+        return Response.json({ success: true, message: 'Squad invite delivered!' });
+      }
+
+      // Get Incoming Squad Invites
+      if (path === '/squad/invites' && request.method === 'GET') {
+        const playerId = url.searchParams.get('playerId');
+        if (!playerId) return Response.json({ success: false, error: 'Missing playerId' }, { status: 400 });
+
+        const cursor = this.ctx.storage.sql.exec(
+          `SELECT id, squad_id, squad_name, squad_tag, inviter_id, inviter_name, status, created_at
+           FROM squad_invites WHERE target_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 10`,
+          playerId
+        );
+
+        const invites: SquadInviteInfo[] = [];
+        for (const row of cursor) {
+          invites.push({
+            id: row.id as number,
+            squadId: row.squad_id as string,
+            squadName: row.squad_name as string,
+            squadTag: row.squad_tag as string,
+            inviterId: row.inviter_id as string,
+            inviterName: row.inviter_name as string,
+            status: row.status as 'pending',
+            createdAt: row.created_at as number,
+          });
+        }
+
+        return Response.json({ success: true, invites });
+      }
+
+      // Respond to Squad Invite (Accept / Reject)
+      if (path === '/squad/respond-invite' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as {
+          playerId?: string;
+          inviteId?: number;
+          action?: 'accept' | 'reject';
+        };
+        const playerId = body.playerId || url.searchParams.get('playerId') || '';
+        const inviteId = body.inviteId;
+        const action = body.action || 'accept';
+
+        if (!playerId || !inviteId) return Response.json({ success: false, error: 'Invalid parameters' }, { status: 400 });
+
+        const invCursor = this.ctx.storage.sql.exec(`SELECT * FROM squad_invites WHERE id = ? AND target_id = ? AND status = 'pending'`, inviteId, playerId);
+        let invRow: Record<string, unknown> | null = null;
+        for (const i of invCursor) { invRow = i; break; }
+        if (!invRow) return Response.json({ success: false, error: 'Invite not found or expired' }, { status: 404 });
+
+        if (action === 'accept') {
+          const squadId = invRow.squad_id as string;
+          // Check squad count
+          const countCursor = this.ctx.storage.sql.exec(`SELECT COUNT(*) AS count FROM squad_members WHERE squad_id = ?`, squadId);
+          let count = 0;
+          for (const c of countCursor) { count = c.count as number; break; }
+          if (count >= 5) return Response.json({ success: false, error: 'Squad lobby is already full (max 5 players).' }, { status: 409 });
+
+          // Leave existing squad
+          this.ctx.storage.sql.exec(`DELETE FROM squad_members WHERE player_id = ?`, playerId);
+
+          // Get player details
+          const accCursor = this.ctx.storage.sql.exec(`SELECT username, numeric_id FROM accounts WHERE id = ?`, playerId);
+          let uName = 'Drifter';
+          let numId = 0;
+          for (const a of accCursor) { uName = a.username as string; numId = a.numeric_id as number; break; }
+
+          this.ctx.storage.sql.exec(
+            `INSERT INTO squad_members (squad_id, player_id, username, numeric_id, role, is_ready, joined_at)
+             VALUES (?, ?, ?, ?, 'member', 0, ?)`,
+            squadId, playerId, uName, numId, Date.now()
+          );
+
+          this.ctx.storage.sql.exec(`UPDATE squad_invites SET status = 'accepted' WHERE id = ?`, inviteId);
+          return Response.json({ success: true, squadId });
+        } else {
+          this.ctx.storage.sql.exec(`UPDATE squad_invites SET status = 'rejected' WHERE id = ?`, inviteId);
+          return Response.json({ success: true, message: 'Squad invite rejected.' });
+        }
+      }
+
+      // Ready System in Squad Lobby
+      if (path === '/squad/ready' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as { playerId?: string; isReady?: boolean };
+        const playerId = body.playerId || url.searchParams.get('playerId') || '';
+        const isReady = body.isReady ? 1 : 0;
+        if (!playerId) return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+
+        this.ctx.storage.sql.exec(`UPDATE squad_members SET is_ready = ? WHERE player_id = ?`, isReady, playerId);
+        return Response.json({ success: true, isReady: isReady === 1 });
+      }
+
+      // Leave Squad
+      if (path === '/squad/leave' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as { playerId?: string };
+        const playerId = body.playerId || url.searchParams.get('playerId') || '';
+        if (!playerId) return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+
+        const memCursor = this.ctx.storage.sql.exec(`SELECT squad_id, role FROM squad_members WHERE player_id = ?`, playerId);
+        let squadId: string | null = null;
+        let role = 'member';
+        for (const m of memCursor) { squadId = m.squad_id as string; role = m.role as string; break; }
+
+        if (squadId) {
+          this.ctx.storage.sql.exec(`DELETE FROM squad_members WHERE squad_id = ? AND player_id = ?`, squadId, playerId);
+          if (role === 'leader') {
+            // Promote next member
+            const nextCursor = this.ctx.storage.sql.exec(`SELECT player_id, username FROM squad_members WHERE squad_id = ? LIMIT 1`, squadId);
+            let nextPlayer: Record<string, unknown> | null = null;
+            for (const n of nextCursor) { nextPlayer = n; break; }
+
+            if (nextPlayer) {
+              this.ctx.storage.sql.exec(`UPDATE squad_members SET role = 'leader', is_ready = 1 WHERE squad_id = ? AND player_id = ?`, squadId, nextPlayer.player_id as string);
+              this.ctx.storage.sql.exec(`UPDATE squads SET leader_id = ?, leader_name = ? WHERE squad_id = ?`, nextPlayer.player_id as string, nextPlayer.username as string, squadId);
+            } else {
+              this.ctx.storage.sql.exec(`DELETE FROM squads WHERE squad_id = ?`, squadId);
+            }
+          }
+        }
+
+        return Response.json({ success: true, message: 'Left squad lobby.' });
+      }
+
+      // Squad Leader Kick Member
+      if (path === '/squad/kick' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as { playerId?: string; targetPlayerId?: string };
+        const playerId = body.playerId || url.searchParams.get('playerId') || '';
+        const targetId = body.targetPlayerId || '';
+
+        const memCursor = this.ctx.storage.sql.exec(`SELECT squad_id, role FROM squad_members WHERE player_id = ?`, playerId);
+        let squadId: string | null = null;
+        let role = 'member';
+        for (const m of memCursor) { squadId = m.squad_id as string; role = m.role as string; break; }
+        if (role !== 'leader') return Response.json({ success: false, error: 'Only squad leader can kick members.' }, { status: 403 });
+
+        this.ctx.storage.sql.exec(`DELETE FROM squad_members WHERE squad_id = ? AND player_id = ?`, squadId, targetId);
+        return Response.json({ success: true, message: 'Member removed from squad.' });
+      }
+
+      // Squad Leader Promote Member
+      if (path === '/squad/promote' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as { playerId?: string; targetPlayerId?: string };
+        const playerId = body.playerId || url.searchParams.get('playerId') || '';
+        const targetId = body.targetPlayerId || '';
+
+        const memCursor = this.ctx.storage.sql.exec(`SELECT squad_id, role FROM squad_members WHERE player_id = ?`, playerId);
+        let squadId: string | null = null;
+        let role = 'member';
+        for (const m of memCursor) { squadId = m.squad_id as string; role = m.role as string; break; }
+        if (role !== 'leader') return Response.json({ success: false, error: 'Only squad leader can promote members.' }, { status: 403 });
+
+        const targetAcc = this.ctx.storage.sql.exec(`SELECT username FROM accounts WHERE id = ?`, targetId);
+        let targetName = 'Leader';
+        for (const t of targetAcc) { targetName = t.username as string; break; }
+
+        this.ctx.storage.sql.exec(`UPDATE squad_members SET role = 'member' WHERE squad_id = ? AND player_id = ?`, squadId, playerId);
+        this.ctx.storage.sql.exec(`UPDATE squad_members SET role = 'leader' WHERE squad_id = ? AND player_id = ?`, squadId, targetId);
+        this.ctx.storage.sql.exec(`UPDATE squads SET leader_id = ?, leader_name = ? WHERE squad_id = ?`, targetId, targetName, squadId);
+
+        return Response.json({ success: true, message: 'Squad leadership transferred.' });
+      }
+
+      // Squad Leader Settings
+      if (path === '/squad/settings' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as { playerId?: string; name?: string; tag?: string; isOpen?: boolean };
+        const playerId = body.playerId || url.searchParams.get('playerId') || '';
+
+        const memCursor = this.ctx.storage.sql.exec(`SELECT squad_id, role FROM squad_members WHERE player_id = ?`, playerId);
+        let squadId: string | null = null;
+        let role = 'member';
+        for (const m of memCursor) { squadId = m.squad_id as string; role = m.role as string; break; }
+        if (role !== 'leader') return Response.json({ success: false, error: 'Only squad leader can change settings.' }, { status: 403 });
+
+        const name = body.name ? filterProfanity(body.name.substring(0, 24)) : null;
+        const tag = body.tag ? body.tag.trim().toUpperCase().replace(/[^A-Z0-9]/g, '').substring(0, 5) : null;
+        const isOpen = body.isOpen !== undefined ? (body.isOpen ? 1 : 0) : null;
+
+        this.ctx.storage.sql.exec(
+          `UPDATE squads
+           SET name = COALESCE(?, name),
+               tag = COALESCE(?, tag),
+               is_open = COALESCE(?, is_open)
+           WHERE squad_id = ?`,
+          name, tag, isOpen, squadId
+        );
+
+        return Response.json({ success: true, message: 'Squad settings updated.' });
+      }
+
+      // Transition from Squad Lobby to Match!
+      if (path === '/squad/start-match' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as { playerId?: string; mode?: string };
+        const playerId = body.playerId || url.searchParams.get('playerId') || '';
+
+        const memCursor = this.ctx.storage.sql.exec(`SELECT squad_id, role FROM squad_members WHERE player_id = ?`, playerId);
+        let squadId: string | null = null;
+        let role = 'member';
+        for (const m of memCursor) { squadId = m.squad_id as string; role = m.role as string; break; }
+        if (role !== 'leader') return Response.json({ success: false, error: 'Only squad leader can launch match.' }, { status: 403 });
+
+        // Verify all members ready
+        const unreadyCursor = this.ctx.storage.sql.exec(`SELECT username FROM squad_members WHERE squad_id = ? AND is_ready = 0`, squadId);
+        let unreadyName: string | null = null;
+        for (const u of unreadyCursor) { unreadyName = u.username as string; break; }
+        if (unreadyName) {
+          return Response.json({ success: false, error: `Waiting for ${unreadyName} to click READY!` }, { status: 400 });
+        }
+
+        // Generate squad match room ID
+        const matchRoomId = `ROOM_SQD_${crypto.randomUUID().substring(0, 6).toUpperCase()}`;
+
+        // Reward squad XP (+120 XP) and level up
+        this.ctx.storage.sql.exec(
+          `UPDATE squads
+           SET match_room_id = ?,
+               squad_xp = squad_xp + 120,
+               squad_level = 1 + ((squad_xp + 120) / 1000)
+           WHERE squad_id = ?`,
+          matchRoomId,
+          squadId
+        );
+
+        // Update player presence for all squad members to in_match
+        this.ctx.storage.sql.exec(
+          `UPDATE player_presence
+           SET status = 'in_match', in_match_room = ?, last_seen_at = ?
+           WHERE player_id IN (SELECT player_id FROM squad_members WHERE squad_id = ?)`,
+          matchRoomId, Date.now(), squadId
+        );
+
+        return Response.json({
+          success: true,
+          matchRoomId,
+          wsUrl: `/ws/room/${matchRoomId}?role=squad`,
+          message: 'Match launched! Transitioning squad to gameplay.'
+        });
+      }
+
+      // Squad Chat
+      if (path === '/squad/chat' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as { playerId?: string; message?: string };
+        const playerId = body.playerId || url.searchParams.get('playerId') || '';
+        const msg = filterProfanity((body.message || '').substring(0, 150));
+        if (!playerId || !msg.trim()) return Response.json({ success: false, error: 'Empty message' }, { status: 400 });
+
+        const memCursor = this.ctx.storage.sql.exec(`SELECT squad_id, username FROM squad_members WHERE player_id = ?`, playerId);
+        let squadId: string | null = null;
+        let uName = 'Drifter';
+        for (const m of memCursor) { squadId = m.squad_id as string; uName = m.username as string; break; }
+        if (!squadId) return Response.json({ success: false, error: 'Not in a squad' }, { status: 400 });
+
+        const now = Date.now();
+        this.ctx.storage.sql.exec(
+          `INSERT INTO squad_chat (squad_id, sender_id, sender_name, message, sent_at) VALUES (?, ?, ?, ?, ?)`,
+          squadId, playerId, uName, msg, now
+        );
+
+        return Response.json({ success: true, sentAt: now });
+      }
+
+      if (path === '/squad/chat' && request.method === 'GET') {
+        const playerId = url.searchParams.get('playerId');
+        if (!playerId) return Response.json({ success: false, error: 'Missing playerId' }, { status: 400 });
+
+        const memCursor = this.ctx.storage.sql.exec(`SELECT squad_id FROM squad_members WHERE player_id = ?`, playerId);
+        let squadId: string | null = null;
+        for (const m of memCursor) { squadId = m.squad_id as string; break; }
+        if (!squadId) return Response.json({ success: true, messages: [] });
+
+        const chatCursor = this.ctx.storage.sql.exec(
+          `SELECT id, squad_id, sender_id, sender_name, message, sent_at
+           FROM squad_chat WHERE squad_id = ? ORDER BY sent_at DESC LIMIT 30`,
+          squadId
+        );
+
+        const messages: SquadChatMessage[] = [];
+        for (const row of chatCursor) {
+          messages.push({
+            id: row.id as number,
+            squadId: row.squad_id as string,
+            senderId: row.sender_id as string,
+            senderName: row.sender_name as string,
+            message: row.message as string,
+            sentAt: row.sent_at as number,
+          });
+        }
+
+        messages.reverse();
+        return Response.json({ success: true, messages });
+      }
+
+      // ---------------------------------------------------------
+      // 6. FREE FIRE CLAN / GUILD SYSTEM (UP TO 50 PLAYERS)
+      // ---------------------------------------------------------
+
+      // Create Clan
+      if (path === '/clan/create' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as {
+          playerId?: string;
+          username?: string;
+          name?: string;
+          tag?: string;
+          description?: string;
+          badgeId?: number;
+          minLevel?: number;
+          isOpen?: boolean;
+        };
+        const playerId = body.playerId || url.searchParams.get('playerId') || '';
+        const username = body.username || url.searchParams.get('username') || 'AetherLeader';
+        const name = filterProfanity((body.name || '').trim().substring(0, 24));
+        const tag = (body.tag || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').substring(0, 5);
+
+        if (!name || name.length < 3) return Response.json({ success: false, error: 'Clan name must be at least 3 characters.' }, { status: 400 });
+        if (!tag || tag.length < 2) return Response.json({ success: false, error: 'Clan tag must be 2-5 characters.' }, { status: 400 });
+
+        // Check unique clan name
+        const existCursor = this.ctx.storage.sql.exec(`SELECT clan_id FROM clans WHERE name = ? COLLATE NOCASE`, name);
+        for (const _ of existCursor) {
+          return Response.json({ success: false, error: 'A clan with this name already exists.' }, { status: 409 });
+        }
+
+        // Leave existing clan
+        this.ctx.storage.sql.exec(`DELETE FROM clan_members WHERE player_id = ?`, playerId);
+
+        const clanId = `CLN_${crypto.randomUUID().substring(0, 6).toUpperCase()}`;
+        const now = Date.now();
+        const desc = filterProfanity((body.description || 'United under the celestial serpent.').substring(0, 150));
+        const badge = body.badgeId || 1;
+        const minLvl = body.minLevel || 1;
+        const isOpen = body.isOpen !== false ? 1 : 0;
+
+        const accCursor = this.ctx.storage.sql.exec(`SELECT numeric_id FROM accounts WHERE id = ?`, playerId);
+        let numericId = 0;
+        for (const a of accCursor) { numericId = (a.numeric_id as number) || 0; break; }
+
+        this.ctx.storage.sql.exec(
+          `INSERT INTO clans (clan_id, name, tag, leader_id, leader_name, description, announcement, badge_id, max_members, min_level, is_open, clan_xp, clan_level, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'Welcome to our celestial guild! Compete in matches to gain Clan XP.', ?, 50, ?, ?, 0, 1, ?)`,
+          clanId, name, tag, playerId, username, desc, badge, minLvl, isOpen, now
+        );
+
+        this.ctx.storage.sql.exec(
+          `INSERT INTO clan_members (clan_id, player_id, username, numeric_id, rank, contribution, joined_at)
+           VALUES (?, ?, ?, ?, 'leader', 500, ?)`,
+          clanId, playerId, username, numericId, now
+        );
+
+        return Response.json({
+          success: true,
+          clan: {
+            clanId,
+            name,
+            tag,
+            leaderId: playerId,
+            leaderName: username,
+            description: desc,
+            announcement: 'Welcome to our celestial guild! Compete in matches to gain Clan XP.',
+            badgeId: badge,
+            memberCount: 1,
+            maxMembers: 50,
+            minLevel: minLvl,
+            isOpen: isOpen === 1,
+            clanXp: 0,
+            clanLevel: 1,
+            createdAt: now,
+          }
+        });
+      }
+
+      // Get My Current Clan
+      if (path === '/clan/my' && request.method === 'GET') {
+        const playerId = url.searchParams.get('playerId');
+        if (!playerId) return Response.json({ success: false, error: 'Missing playerId' }, { status: 400 });
+
+        const memCursor = this.ctx.storage.sql.exec(`SELECT clan_id, rank FROM clan_members WHERE player_id = ?`, playerId);
+        let clanId: string | null = null;
+        let myRank = 'member';
+        for (const m of memCursor) { clanId = m.clan_id as string; myRank = m.rank as string; break; }
+        if (!clanId) return Response.json({ success: true, hasClan: false, clan: null });
+
+        const clanCursor = this.ctx.storage.sql.exec(`SELECT * FROM clans WHERE clan_id = ?`, clanId);
+        let cRow: Record<string, unknown> | null = null;
+        for (const c of clanCursor) { cRow = c; break; }
+        if (!cRow) return Response.json({ success: true, hasClan: false, clan: null });
+
+        const membersCursor = this.ctx.storage.sql.exec(
+          `SELECT cm.player_id, cm.username, cm.numeric_id, cm.rank, cm.contribution, cm.joined_at,
+                  p.status AS presence_status, p.last_seen_at
+           FROM clan_members cm
+           LEFT JOIN player_presence p ON p.player_id = cm.player_id
+           WHERE cm.clan_id = ?
+           ORDER BY CASE cm.rank WHEN 'leader' THEN 1 WHEN 'officer' THEN 2 ELSE 3 END, cm.contribution DESC`,
+          clanId
+        );
+
+        const now = Date.now();
+        let onlineCount = 0;
+        const members: ClanMemberInfo[] = [];
+
+        for (const row of membersCursor) {
+          const lastSeen = (row.last_seen_at as number) || 0;
+          const status = (row.presence_status as string) || 'offline';
+          const isOnline = (now - lastSeen < 120000) && status !== 'offline';
+          if (isOnline) onlineCount++;
+
+          members.push({
+            playerId: row.player_id as string,
+            username: row.username as string,
+            numericId: row.numeric_id as number,
+            rank: row.rank as 'leader' | 'officer' | 'member',
+            contribution: (row.contribution as number) || 0,
+            isOnline,
+            joinedAt: row.joined_at as number,
+          });
+        }
+
+        const clan: ClanInfo = {
+          clanId: cRow.clan_id as string,
+          name: cRow.name as string,
+          tag: cRow.tag as string,
+          leaderId: cRow.leader_id as string,
+          leaderName: cRow.leader_name as string,
+          description: cRow.description as string,
+          announcement: cRow.announcement as string,
+          badgeId: (cRow.badge_id as number) || 1,
+          memberCount: members.length,
+          maxMembers: (cRow.max_members as number) || 50,
+          minLevel: (cRow.min_level as number) || 1,
+          isOpen: (cRow.is_open as number) === 1,
+          clanXp: (cRow.clan_xp as number) || 0,
+          clanLevel: (cRow.clan_level as number) || 1,
+          members,
+          onlineCount,
+          createdAt: cRow.created_at as number,
+        };
+
+        return Response.json({ success: true, hasClan: true, myRank, clan });
+      }
+
+      // Browse / Search Public Clans
+      if (path === '/clan/list' && request.method === 'GET') {
+        const query = url.searchParams.get('search')?.trim() || '';
+        const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '20', 10), 1), 50);
+
+        let cursor;
+        if (query) {
+          cursor = this.ctx.storage.sql.exec(
+            `SELECT c.*, COUNT(cm.player_id) AS member_count
+             FROM clans c
+             LEFT JOIN clan_members cm ON cm.clan_id = c.clan_id
+             WHERE c.name LIKE ? OR c.tag LIKE ?
+             GROUP BY c.clan_id
+             ORDER BY member_count DESC, c.clan_xp DESC
+             LIMIT ?`,
+            `%${query}%`, `%${query}%`, limit
+          );
+        } else {
+          cursor = this.ctx.storage.sql.exec(
+            `SELECT c.*, COUNT(cm.player_id) AS member_count
+             FROM clans c
+             LEFT JOIN clan_members cm ON cm.clan_id = c.clan_id
+             GROUP BY c.clan_id
+             ORDER BY member_count DESC, c.clan_xp DESC
+             LIMIT ?`,
+            limit
+          );
+        }
+
+        const clans: ClanInfo[] = [];
+        for (const row of cursor) {
+          clans.push({
+            clanId: row.clan_id as string,
+            name: row.name as string,
+            tag: row.tag as string,
+            leaderId: row.leader_id as string,
+            leaderName: row.leader_name as string,
+            description: row.description as string,
+            announcement: row.announcement as string,
+            badgeId: (row.badge_id as number) || 1,
+            memberCount: (row.member_count as number) || 1,
+            maxMembers: (row.max_members as number) || 50,
+            minLevel: (row.min_level as number) || 1,
+            isOpen: (row.is_open as number) === 1,
+            clanXp: (row.clan_xp as number) || 0,
+            clanLevel: (row.clan_level as number) || 1,
+            createdAt: row.created_at as number,
+          });
+        }
+
+        return Response.json({ success: true, count: clans.length, clans });
+      }
+
+      // Join Clan (Instant if open, or request)
+      if (path === '/clan/join' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as { playerId?: string; clanId?: string };
+        const playerId = body.playerId || url.searchParams.get('playerId') || '';
+        const clanId = body.clanId || '';
+
+        if (!playerId || !clanId) return Response.json({ success: false, error: 'Missing parameters' }, { status: 400 });
+
+        const clanCursor = this.ctx.storage.sql.exec(`SELECT * FROM clans WHERE clan_id = ?`, clanId);
+        let cRow: Record<string, unknown> | null = null;
+        for (const c of clanCursor) { cRow = c; break; }
+        if (!cRow) return Response.json({ success: false, error: 'Clan not found' }, { status: 404 });
+
+        // Check member capacity
+        const countCursor = this.ctx.storage.sql.exec(`SELECT COUNT(*) AS count FROM clan_members WHERE clan_id = ?`, clanId);
+        let count = 0;
+        for (const c of countCursor) { count = c.count as number; break; }
+        if (count >= ((cRow.max_members as number) || 50)) {
+          return Response.json({ success: false, error: 'Clan has reached maximum membership capacity (50 members).' }, { status: 409 });
+        }
+
+        // Get player profile info
+        const profCursor = this.ctx.storage.sql.exec(
+          `SELECT a.username, a.numeric_id, p.level FROM accounts a LEFT JOIN profiles p ON p.player_id = a.id WHERE a.id = ?`,
+          playerId
+        );
+        let uName = 'Drifter';
+        let numId = 0;
+        let lvl = 1;
+        for (const p of profCursor) {
+          uName = p.username as string;
+          numId = (p.numeric_id as number) || 0;
+          lvl = (p.level as number) || 1;
+          break;
+        }
+
+        if (lvl < ((cRow.min_level as number) || 1)) {
+          return Response.json({ success: false, error: `Minimum level required to join is Level ${cRow.min_level}.` }, { status: 403 });
+        }
+
+        const isOpen = (cRow.is_open as number) === 1;
+        if (isOpen) {
+          // Instant Join: Leave previous clan
+          this.ctx.storage.sql.exec(`DELETE FROM clan_members WHERE player_id = ?`, playerId);
+          this.ctx.storage.sql.exec(
+            `INSERT INTO clan_members (clan_id, player_id, username, numeric_id, rank, contribution, joined_at)
+             VALUES (?, ?, ?, ?, 'member', 100, ?)`,
+            clanId, playerId, uName, numId, Date.now()
+          );
+          return Response.json({ success: true, joined: true, message: `Welcome to ${cRow.name}!` });
+        } else {
+          // Requires Approval
+          this.ctx.storage.sql.exec(
+            `INSERT INTO clan_join_requests (clan_id, player_id, username, numeric_id, level, status, created_at)
+             VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
+            clanId, playerId, uName, numId, lvl, Date.now()
+          );
+          return Response.json({ success: true, joined: false, message: 'Join request submitted to Clan Officers.' });
+        }
+      }
+
+      // View Clan Join Requests (Leader / Officer)
+      if (path === '/clan/requests' && request.method === 'GET') {
+        const playerId = url.searchParams.get('playerId');
+        if (!playerId) return Response.json({ success: false, error: 'Missing playerId' }, { status: 400 });
+
+        const memCursor = this.ctx.storage.sql.exec(`SELECT clan_id, rank FROM clan_members WHERE player_id = ?`, playerId);
+        let clanId: string | null = null;
+        let rank = 'member';
+        for (const m of memCursor) { clanId = m.clan_id as string; rank = m.rank as string; break; }
+        if (rank !== 'leader' && rank !== 'officer') {
+          return Response.json({ success: false, error: 'Officer permissions required.' }, { status: 403 });
+        }
+
+        const reqCursor = this.ctx.storage.sql.exec(
+          `SELECT id, clan_id, player_id, username, numeric_id, level, status, created_at
+           FROM clan_join_requests WHERE clan_id = ? AND status = 'pending' ORDER BY created_at DESC`,
+          clanId
+        );
+
+        const requests: ClanJoinRequestInfo[] = [];
+        for (const row of reqCursor) {
+          requests.push({
+            id: row.id as number,
+            clanId: row.clan_id as string,
+            playerId: row.player_id as string,
+            username: row.username as string,
+            numericId: row.numeric_id as number,
+            level: row.level as number,
+            status: row.status as 'pending',
+            createdAt: row.created_at as number,
+          });
+        }
+
+        return Response.json({ success: true, requests });
+      }
+
+      // Respond to Clan Join Request (Accept / Reject)
+      if (path === '/clan/respond-request' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as {
+          playerId?: string;
+          requestId?: number;
+          action?: 'accept' | 'reject';
+        };
+        const playerId = body.playerId || url.searchParams.get('playerId') || '';
+        const requestId = body.requestId;
+        const action = body.action || 'accept';
+
+        const memCursor = this.ctx.storage.sql.exec(`SELECT clan_id, rank FROM clan_members WHERE player_id = ?`, playerId);
+        let clanId: string | null = null;
+        let rank = 'member';
+        for (const m of memCursor) { clanId = m.clan_id as string; rank = m.rank as string; break; }
+        if (rank !== 'leader' && rank !== 'officer') {
+          return Response.json({ success: false, error: 'Officer permissions required.' }, { status: 403 });
+        }
+
+        const reqCursor = this.ctx.storage.sql.exec(`SELECT * FROM clan_join_requests WHERE id = ? AND clan_id = ? AND status = 'pending'`, requestId, clanId);
+        let reqRow: Record<string, unknown> | null = null;
+        for (const r of reqCursor) { reqRow = r; break; }
+        if (!reqRow) return Response.json({ success: false, error: 'Request not found' }, { status: 404 });
+
+        if (action === 'accept') {
+          this.ctx.storage.sql.exec(`DELETE FROM clan_members WHERE player_id = ?`, reqRow.player_id as string);
+          this.ctx.storage.sql.exec(
+            `INSERT INTO clan_members (clan_id, player_id, username, numeric_id, rank, contribution, joined_at)
+             VALUES (?, ?, ?, ?, 'member', 100, ?)`,
+            clanId, reqRow.player_id as string, reqRow.username as string, reqRow.numeric_id as number, Date.now()
+          );
+          this.ctx.storage.sql.exec(`UPDATE clan_join_requests SET status = 'accepted' WHERE id = ?`, requestId);
+          return Response.json({ success: true, message: 'Player accepted into clan!' });
+        } else {
+          this.ctx.storage.sql.exec(`UPDATE clan_join_requests SET status = 'rejected' WHERE id = ?`, requestId);
+          return Response.json({ success: true, message: 'Join request rejected.' });
+        }
+      }
+
+      // Leave Clan
+      if (path === '/clan/leave' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as { playerId?: string };
+        const playerId = body.playerId || url.searchParams.get('playerId') || '';
+
+        const memCursor = this.ctx.storage.sql.exec(`SELECT clan_id, rank FROM clan_members WHERE player_id = ?`, playerId);
+        let clanId: string | null = null;
+        let rank = 'member';
+        for (const m of memCursor) { clanId = m.clan_id as string; rank = m.rank as string; break; }
+        if (!clanId) return Response.json({ success: false, error: 'Not in a clan' }, { status: 400 });
+
+        if (rank === 'leader') {
+          const others = this.ctx.storage.sql.exec(`SELECT player_id, username FROM clan_members WHERE clan_id = ? AND player_id != ? ORDER BY CASE rank WHEN 'officer' THEN 1 ELSE 2 END LIMIT 1`, clanId, playerId);
+          let nextLead: Record<string, unknown> | null = null;
+          for (const o of others) { nextLead = o; break; }
+
+          if (nextLead) {
+            this.ctx.storage.sql.exec(`UPDATE clan_members SET rank = 'leader' WHERE clan_id = ? AND player_id = ?`, clanId, nextLead.player_id as string);
+            this.ctx.storage.sql.exec(`UPDATE clans SET leader_id = ?, leader_name = ? WHERE clan_id = ?`, nextLead.player_id as string, nextLead.username as string, clanId);
+          } else {
+            this.ctx.storage.sql.exec(`DELETE FROM clans WHERE clan_id = ?`, clanId);
+          }
+        }
+
+        this.ctx.storage.sql.exec(`DELETE FROM clan_members WHERE clan_id = ? AND player_id = ?`, clanId, playerId);
+        return Response.json({ success: true, message: 'Left clan.' });
+      }
+
+      // Clan Kick Member
+      if (path === '/clan/kick' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as { playerId?: string; targetPlayerId?: string };
+        const playerId = body.playerId || url.searchParams.get('playerId') || '';
+        const targetId = body.targetPlayerId || '';
+
+        const memCursor = this.ctx.storage.sql.exec(`SELECT clan_id, rank FROM clan_members WHERE player_id = ?`, playerId);
+        let clanId: string | null = null;
+        let callerRank = 'member';
+        for (const m of memCursor) { clanId = m.clan_id as string; callerRank = m.rank as string; break; }
+
+        if (callerRank !== 'leader' && callerRank !== 'officer') {
+          return Response.json({ success: false, error: 'Officer permissions required.' }, { status: 403 });
+        }
+
+        const targetCursor = this.ctx.storage.sql.exec(`SELECT rank FROM clan_members WHERE clan_id = ? AND player_id = ?`, clanId, targetId);
+        let targetRank: string | null = null;
+        for (const t of targetCursor) { targetRank = t.rank as string; break; }
+        if (!targetRank) return Response.json({ success: false, error: 'Target not in clan.' }, { status: 404 });
+
+        if (callerRank === 'officer' && (targetRank === 'officer' || targetRank === 'leader')) {
+          return Response.json({ success: false, error: 'Officers cannot kick other officers or the leader.' }, { status: 403 });
+        }
+
+        this.ctx.storage.sql.exec(`DELETE FROM clan_members WHERE clan_id = ? AND player_id = ?`, clanId, targetId);
+        return Response.json({ success: true, message: 'Member kicked from clan.' });
+      }
+
+      // Clan Leader Set Rank (Officer / Member)
+      if (path === '/clan/set-rank' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as { playerId?: string; targetPlayerId?: string; rank?: 'officer' | 'member' };
+        const playerId = body.playerId || url.searchParams.get('playerId') || '';
+        const targetId = body.targetPlayerId || '';
+        const newRank = body.rank || 'member';
+
+        const memCursor = this.ctx.storage.sql.exec(`SELECT clan_id, rank FROM clan_members WHERE player_id = ?`, playerId);
+        let clanId: string | null = null;
+        let callerRank = 'member';
+        for (const m of memCursor) { clanId = m.clan_id as string; callerRank = m.rank as string; break; }
+        if (callerRank !== 'leader') return Response.json({ success: false, error: 'Only clan leader can promote/demote ranks.' }, { status: 403 });
+
+        this.ctx.storage.sql.exec(`UPDATE clan_members SET rank = ? WHERE clan_id = ? AND player_id = ?`, newRank, clanId, targetId);
+        return Response.json({ success: true, message: `Rank updated to ${newRank}.` });
+      }
+
+      // Clan Announcement
+      if (path === '/clan/announcement' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as { playerId?: string; announcement?: string };
+        const playerId = body.playerId || url.searchParams.get('playerId') || '';
+        const announcement = filterProfanity((body.announcement || '').substring(0, 200));
+
+        const memCursor = this.ctx.storage.sql.exec(`SELECT clan_id, rank FROM clan_members WHERE player_id = ?`, playerId);
+        let clanId: string | null = null;
+        let callerRank = 'member';
+        for (const m of memCursor) { clanId = m.clan_id as string; callerRank = m.rank as string; break; }
+        if (callerRank !== 'leader' && callerRank !== 'officer') {
+          return Response.json({ success: false, error: 'Officer permissions required.' }, { status: 403 });
+        }
+
+        this.ctx.storage.sql.exec(`UPDATE clans SET announcement = ? WHERE clan_id = ?`, announcement, clanId);
+        return Response.json({ success: true, announcement });
+      }
+
+      // Clan Chat
+      if (path === '/clan/chat' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as { playerId?: string; message?: string };
+        const playerId = body.playerId || url.searchParams.get('playerId') || '';
+        const msg = filterProfanity((body.message || '').substring(0, 150));
+        if (!playerId || !msg.trim()) return Response.json({ success: false, error: 'Empty message' }, { status: 400 });
+
+        const memCursor = this.ctx.storage.sql.exec(`SELECT clan_id, username, rank FROM clan_members WHERE player_id = ?`, playerId);
+        let clanId: string | null = null;
+        let uName = 'Drifter';
+        let rank = 'member';
+        for (const m of memCursor) { clanId = m.clan_id as string; uName = m.username as string; rank = m.rank as string; break; }
+        if (!clanId) return Response.json({ success: false, error: 'Not in a clan' }, { status: 400 });
+
+        const now = Date.now();
+        this.ctx.storage.sql.exec(
+          `INSERT INTO clan_chat (clan_id, sender_id, sender_name, sender_rank, message, sent_at) VALUES (?, ?, ?, ?, ?, ?)`,
+          clanId, playerId, uName, rank, msg, now
+        );
+
+        // Award clan XP (+10) for activity
+        this.ctx.storage.sql.exec(
+          `UPDATE clans SET clan_xp = clan_xp + 10, clan_level = 1 + ((clan_xp + 10) / 2500) WHERE clan_id = ?`,
+          clanId
+        );
+
+        return Response.json({ success: true, sentAt: now });
+      }
+
+      if (path === '/clan/chat' && request.method === 'GET') {
+        const playerId = url.searchParams.get('playerId');
+        if (!playerId) return Response.json({ success: false, error: 'Missing playerId' }, { status: 400 });
+
+        const memCursor = this.ctx.storage.sql.exec(`SELECT clan_id FROM clan_members WHERE player_id = ?`, playerId);
+        let clanId: string | null = null;
+        for (const m of memCursor) { clanId = m.clan_id as string; break; }
+        if (!clanId) return Response.json({ success: true, messages: [] });
+
+        const chatCursor = this.ctx.storage.sql.exec(
+          `SELECT id, clan_id, sender_id, sender_name, sender_rank, message, sent_at
+           FROM clan_chat WHERE clan_id = ? ORDER BY sent_at DESC LIMIT 50`,
+          clanId
+        );
+
+        const messages: ClanChatMessage[] = [];
+        for (const row of chatCursor) {
+          messages.push({
+            id: row.id as number,
+            clanId: row.clan_id as string,
+            senderId: row.sender_id as string,
+            senderName: row.sender_name as string,
+            senderRank: row.sender_rank as string,
+            message: row.message as string,
+            sentAt: row.sent_at as number,
+          });
+        }
+
+        messages.reverse();
+        return Response.json({ success: true, messages });
       }
 
       // ---------------------------------------------------------

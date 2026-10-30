@@ -81,6 +81,18 @@ namespace AetherSerpent.Core
                 profObj.AddComponent<AetherSerpent.UI.FreeFireProfileUI>();
             }
 
+            if (AetherSerpent.Social.SocialGroupingManager.Instance == null)
+            {
+                GameObject sgObj = new GameObject("[SocialGroupingManager]");
+                sgObj.AddComponent<AetherSerpent.Social.SocialGroupingManager>();
+            }
+
+            if (AetherSerpent.UI.FreeFireSocialUI.Instance == null)
+            {
+                GameObject sUiObj = new GameObject("[FreeFireSocialUI]");
+                sUiObj.AddComponent<AetherSerpent.UI.FreeFireSocialUI>();
+            }
+
             yield return new WaitForSeconds(0.3f);
             UpdateStatus("Validating Universal Render Pipeline & Shaders...", 0.45f);
 

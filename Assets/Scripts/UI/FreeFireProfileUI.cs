@@ -275,8 +275,10 @@ namespace AetherSerpent.UI
             GUILayout.BeginVertical();
             GUILayout.BeginHorizontal();
 
-            string squadTag = !string.IsNullOrEmpty(prof.squadName) ? $"<color=#00e5ff>[{prof.squadName}]</color> " : "";
-            GUILayout.Label($"<b><size=15>{squadTag}{prof.username}</size></b>", GUILayout.ExpandWidth(true));
+            string clanTag = SocialGroupingManager.Instance != null && SocialGroupingManager.Instance.InClan ? $"<color=#ffcc00>[{SocialGroupingManager.Instance.CurrentClan.tag}]</color> " : "";
+            string squadTag = SocialGroupingManager.Instance != null && SocialGroupingManager.Instance.InSquad ? $"<color=#00e5ff>[{SocialGroupingManager.Instance.CurrentSquad.tag}]</color> " :
+                             (!string.IsNullOrEmpty(prof.squadName) ? $"<color=#00e5ff>[{prof.squadName}]</color> " : "");
+            GUILayout.Label($"<b><size=15>{clanTag}{squadTag}{prof.username}</size></b>", GUILayout.ExpandWidth(true));
 
             // Close button
             if (GUILayout.Button("✕ CLOSE", GUILayout.Width(75), GUILayout.Height(24)))
@@ -842,9 +844,14 @@ namespace AetherSerpent.UI
                     }
                 }
 
-                if (GUILayout.Button("⚡ CREATE PARTY", GUILayout.Height(24)))
+                if (GUILayout.Button("⚡ SQUAD INVITE", GUILayout.Height(24)))
                 {
-                    if (SocialManager.Instance != null)
+                    if (SocialGroupingManager.Instance != null)
+                    {
+                        _ = SocialGroupingManager.Instance.InviteFriendToSquadAsync(inspectedProfile.playerId);
+                        ShowFeedback($"Squad invite sent to {inspectedProfile.username}!");
+                    }
+                    else if (SocialManager.Instance != null)
                     {
                         _ = SocialManager.Instance.CreatePartyAsync();
                         ShowFeedback($"Co-op Party created! Share invite code with {inspectedProfile.username}.");

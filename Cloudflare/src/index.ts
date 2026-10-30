@@ -483,7 +483,7 @@ export default {
           playerPayload = await AuthService.verifyJWT(token, env.JWT_SECRET);
         }
 
-        const isPublicRead = request.method === 'GET' && url.pathname.startsWith('/api/leaderboard/');
+        const isPublicRead = request.method === 'GET' && (url.pathname.startsWith('/api/leaderboard/') || url.pathname === '/api/social/clan/list');
         if (!isPublicRead && !playerPayload) {
           return Response.json({ error: 'Authorization required for this endpoint.' }, {
             status: 401,

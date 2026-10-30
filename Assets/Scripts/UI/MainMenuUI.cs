@@ -46,6 +46,16 @@ namespace AetherSerpent.UI
                 GameObject profObj = new GameObject("[FreeFireProfileUI]");
                 profObj.AddComponent<FreeFireProfileUI>();
             }
+            if (AetherSerpent.Social.SocialGroupingManager.Instance == null)
+            {
+                GameObject sgObj = new GameObject("[SocialGroupingManager]");
+                sgObj.AddComponent<AetherSerpent.Social.SocialGroupingManager>();
+            }
+            if (FreeFireSocialUI.Instance == null)
+            {
+                GameObject sUiObj = new GameObject("[FreeFireSocialUI]");
+                sUiObj.AddComponent<FreeFireSocialUI>();
+            }
         }
 
         public void OnPlayClicked()
@@ -93,7 +103,10 @@ namespace AetherSerpent.UI
 
                 GUILayout.BeginArea(new Rect(profilePillRect.x + 8, profilePillRect.y + 4, profilePillRect.width - 16, profilePillRect.height - 8));
                 GUILayout.BeginHorizontal();
-                GUILayout.Label($"<b>{acc.Username}</b>\n<color=#00e5ff>UID: {acc.NumericId}</color>", GUILayout.Width(130));
+                string displayName = AetherSerpent.Social.SocialGroupingManager.Instance != null ?
+                    AetherSerpent.Social.SocialGroupingManager.Instance.GetFormattedPlayerTag(acc.Username) : acc.Username;
+
+                GUILayout.Label($"<b>{displayName}</b>\n<color=#00e5ff>UID: {acc.NumericId}</color>", GUILayout.Width(130));
                 if (GUILayout.Button("PROFILE", GUILayout.Width(75), GUILayout.Height(36)))
                 {
                     FreeFireProfileUI.Instance?.ToggleVisibility();
@@ -105,7 +118,7 @@ namespace AetherSerpent.UI
             // Immediate GUI fallback for testing and easy navigation
             if (playButton == null)
             {
-                Rect menuRect = new Rect(Screen.width / 2f - 160, Screen.height / 2f - 160, 320, 320);
+                Rect menuRect = new Rect(Screen.width / 2f - 160, Screen.height / 2f - 170, 320, 340);
                 GUI.Box(menuRect, "<b>AETHERSERPENT // MAIN MENU</b>");
                 GUILayout.BeginArea(new Rect(menuRect.x + 20, menuRect.y + 35, menuRect.width - 40, menuRect.height - 45));
 
@@ -115,18 +128,28 @@ namespace AetherSerpent.UI
                 }
 
                 GUILayout.Space(6);
-                if (GUILayout.Button("PROFILE & IDENTITY [P]", GUILayout.Height(32)))
+                if (GUILayout.Button("PROFILE & IDENTITY [P]", GUILayout.Height(30)))
                 {
                     FreeFireProfileUI.Instance?.ToggleVisibility();
                 }
 
                 GUILayout.Space(6);
-                if (GUILayout.Button("LEADERBOARDS & SOCIAL [L]", GUILayout.Height(32)))
+                if (GUILayout.Button("FRIENDS • SQUAD • CLAN [L]", GUILayout.Height(32)))
                 {
-                    if (SocialAndLeaderboardUI.Instance != null)
+                    if (FreeFireSocialUI.Instance != null)
+                    {
+                        FreeFireSocialUI.Instance.ToggleVisibility();
+                    }
+                    else if (SocialAndLeaderboardUI.Instance != null)
                     {
                         SocialAndLeaderboardUI.Instance.ToggleVisibility();
                     }
+                }
+
+                GUILayout.Space(6);
+                if (GUILayout.Button("GLOBAL LEADERBOARDS", GUILayout.Height(28)))
+                {
+                    SocialAndLeaderboardUI.Instance?.ToggleVisibility();
                 }
 
                 GUILayout.Space(6);

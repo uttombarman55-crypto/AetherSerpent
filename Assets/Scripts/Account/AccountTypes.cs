@@ -116,3 +116,4 @@ namespace AetherSerpent.Account
         public AccountProfile profile;
     }
 }
+

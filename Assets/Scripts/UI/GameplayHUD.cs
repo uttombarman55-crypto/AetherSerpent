@@ -90,6 +90,16 @@ namespace AetherSerpent.UI
                 GameObject profObj = new GameObject("[FreeFireProfileUI]");
                 profObj.AddComponent<FreeFireProfileUI>();
             }
+            if (AetherSerpent.Social.SocialGroupingManager.Instance == null)
+            {
+                GameObject sgObj = new GameObject("[SocialGroupingManager]");
+                sgObj.AddComponent<AetherSerpent.Social.SocialGroupingManager>();
+            }
+            if (FreeFireSocialUI.Instance == null)
+            {
+                GameObject sUiObj = new GameObject("[FreeFireSocialUI]");
+                sUiObj.AddComponent<FreeFireSocialUI>();
+            }
         }
 
         private void OnDestroy()
@@ -275,6 +285,16 @@ namespace AetherSerpent.UI
                 GameObject profObj = new GameObject("[FreeFireProfileUI]");
                 profObj.AddComponent<FreeFireProfileUI>();
             }
+            if (AetherSerpent.Social.SocialGroupingManager.Instance == null)
+            {
+                GameObject sgObj = new GameObject("[SocialGroupingManager]");
+                sgObj.AddComponent<AetherSerpent.Social.SocialGroupingManager>();
+            }
+            if (FreeFireSocialUI.Instance == null)
+            {
+                GameObject sUiObj = new GameObject("[FreeFireSocialUI]");
+                sUiObj.AddComponent<FreeFireSocialUI>();
+            }
         }
 
         public void RestartGame()
@@ -310,15 +330,22 @@ namespace AetherSerpent.UI
 
         private void OnGUI()
         {
-            // HUD Profile quick access button in top-right
-            if (FreeFireProfileUI.Instance != null && !FreeFireProfileUI.Instance.IsVisible)
+            // HUD Profile & Social quick access buttons in top-right
+            if ((FreeFireProfileUI.Instance == null || !FreeFireProfileUI.Instance.IsVisible) &&
+                (FreeFireSocialUI.Instance == null || !FreeFireSocialUI.Instance.IsVisible))
             {
                 var acc = AetherSerpent.Account.AccountManager.Instance;
                 string uidStr = acc != null && acc.NumericId > 0 ? $"UID: {acc.NumericId}" : "PROFILE";
-                Rect btnRect = new Rect(Screen.width - 145, 10, 135, 28);
-                if (GUI.Button(btnRect, $"<b>{uidStr} [P]</b>"))
+                Rect profileRect = new Rect(Screen.width - 275, 10, 130, 28);
+                if (GUI.Button(profileRect, $"<b>{uidStr} [P]</b>"))
                 {
-                    FreeFireProfileUI.Instance.ToggleVisibility();
+                    FreeFireProfileUI.Instance?.ToggleVisibility();
+                }
+
+                Rect socialRect = new Rect(Screen.width - 140, 10, 130, 28);
+                if (GUI.Button(socialRect, "<b>SOCIAL [L]</b>"))
+                {
+                    FreeFireSocialUI.Instance?.ToggleVisibility();
                 }
             }
         }

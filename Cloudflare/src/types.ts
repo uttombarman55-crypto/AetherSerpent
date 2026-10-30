@@ -104,6 +104,30 @@ export interface FriendInfo {
   isOnline: boolean;
 }
 
+export interface FriendRequestInfo {
+  id: number;
+  senderId: string;
+  senderName: string;
+  senderNumericId: number;
+  receiverId: string;
+  receiverName: string;
+  status: 'pending' | 'accepted' | 'rejected';
+  createdAt: number;
+}
+
+export interface FriendDetailInfo {
+  playerId: string;
+  username: string;
+  numericId: number;
+  isOnline: boolean;
+  status: 'online' | 'in_match' | 'offline';
+  lastLoginAt: number;
+  addedAt: number;
+  currentSquadId?: string;
+  squadTag?: string;
+  clanTag?: string;
+}
+
 export interface PartyMemberInfo {
   playerId: string;
   username: string;
@@ -116,6 +140,103 @@ export interface PartyInfo {
   leaderId: string;
   leaderName: string;
   members: PartyMemberInfo[];
+  createdAt: number;
+}
+
+// Free Fire Squad Types (4-5 players)
+export interface SquadMemberInfo {
+  playerId: string;
+  username: string;
+  numericId: number;
+  role: 'leader' | 'member';
+  isReady: boolean;
+  joinedAt: number;
+}
+
+export interface SquadChatMessage {
+  id: number;
+  squadId: string;
+  senderId: string;
+  senderName: string;
+  message: string;
+  sentAt: number;
+}
+
+export interface SquadInviteInfo {
+  id: number;
+  squadId: string;
+  squadName: string;
+  squadTag: string;
+  inviterId: string;
+  inviterName: string;
+  status: 'pending' | 'accepted' | 'rejected';
+  createdAt: number;
+}
+
+export interface SquadInfo {
+  squadId: string;
+  name: string;
+  tag: string;
+  leaderId: string;
+  leaderName: string;
+  maxMembers: number;
+  isOpen: boolean;
+  squadXp: number;
+  squadLevel: number;
+  matchRoomId?: string;
+  members: SquadMemberInfo[];
+  createdAt: number;
+}
+
+// Free Fire Clan / Guild Types (up to 50 players)
+export interface ClanMemberInfo {
+  playerId: string;
+  username: string;
+  numericId: number;
+  rank: 'leader' | 'officer' | 'member';
+  contribution: number;
+  isOnline: boolean;
+  joinedAt: number;
+}
+
+export interface ClanChatMessage {
+  id: number;
+  clanId: string;
+  senderId: string;
+  senderName: string;
+  senderRank: string;
+  message: string;
+  sentAt: number;
+}
+
+export interface ClanJoinRequestInfo {
+  id: number;
+  clanId: string;
+  playerId: string;
+  username: string;
+  numericId: number;
+  level: number;
+  status: 'pending' | 'accepted' | 'rejected';
+  createdAt: number;
+}
+
+export interface ClanInfo {
+  clanId: string;
+  name: string;
+  tag: string;
+  leaderId: string;
+  leaderName: string;
+  description: string;
+  announcement: string;
+  badgeId: number;
+  memberCount: number;
+  maxMembers: number;
+  minLevel: number;
+  isOpen: boolean;
+  clanXp: number;
+  clanLevel: number;
+  members?: ClanMemberInfo[];
+  onlineCount?: number;
   createdAt: number;
 }
 
